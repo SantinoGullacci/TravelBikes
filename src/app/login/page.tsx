@@ -32,51 +32,56 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-8 space-y-6 shadow-xl">
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-8 space-y-6 shadow-2xl relative overflow-hidden">
+        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-white via-orange-500 to-red-600" />
+        
         <div className="text-center space-y-2">
-          <div className="inline-flex p-3 bg-sky-500/10 rounded-2xl border border-sky-500/20 text-sky-400 mb-2">
-            <Bike className="w-10 h-10" />
-          </div>
-          <h1 className="text-2xl font-extrabold text-white">
-            Travel Bikes <span className="text-sky-400">Staff</span>
-          </h1>
-          <p className="text-sm text-slate-400">Ingresá con tu cuenta de empleado o administrador</p>
+          <div className="flex items-center justify-center mb-3">
+  <img 
+    src="/logo.png" 
+    alt="Travel Bikes Logo" 
+    className="h-50 w-auto object-contain" 
+  />
+</div>
+          <p className="text-xs text-orange-500 font-bold uppercase tracking-widest">
+            Puerto Madryn
+          </p>
         </div>
 
         {error && (
-          <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-800 text-rose-300 text-sm text-center">
+          <div className="p-3 rounded-xl bg-red-950/80 border border-red-700 text-red-300 text-xs font-bold text-center">
             {error}
           </div>
         )}
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Email</label>
+            <label className="block text-xs font-semibold text-zinc-300 mb-1">Email</label>
             <div className="relative">
-              <Mail className="w-5 h-5 text-slate-500 absolute left-3.5 top-3.5" />
+              <Mail className="w-5 h-5 text-zinc-500 absolute left-3.5 top-3.5" />
               <input
                 type="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="empleado@travelbikes.com"
-                className="w-full pl-11 pr-4 py-3 rounded-xl bg-slate-950 border border-slate-800 text-sm focus:border-sky-500 outline-none"
+                className="w-full pl-11 pr-4 py-3 rounded-xl bg-zinc-950 border border-zinc-800 text-sm text-white focus:border-orange-500 outline-none transition"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Contraseña</label>
+            <label className="block text-xs font-semibold text-zinc-300 mb-1">Contraseña</label>
             <div className="relative">
-              <Lock className="w-5 h-5 text-slate-500 absolute left-3.5 top-3.5" />
+              <Lock className="w-5 h-5 text-zinc-500 absolute left-3.5 top-3.5" />
               <input
                 type="password"
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
-                className="w-full pl-11 pr-4 py-3 rounded-xl bg-slate-950 border border-slate-800 text-sm focus:border-sky-500 outline-none"
+                className="w-full pl-11 pr-4 py-3 rounded-xl bg-zinc-950 border border-zinc-800 text-sm text-white focus:border-orange-500 outline-none transition"
               />
             </div>
           </div>
@@ -84,7 +89,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold rounded-xl transition"
+            className="w-full py-3.5 bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-500 hover:to-red-500 disabled:opacity-50 text-white font-extrabold uppercase tracking-wider text-sm rounded-xl transition shadow-lg shadow-orange-950/50 active:scale-95"
           >
             {loading ? 'Ingresando...' : 'Iniciar Sesión'}
           </button>

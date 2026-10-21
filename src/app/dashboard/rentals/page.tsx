@@ -32,7 +32,6 @@ export default function RentalsDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [processingId, setProcessingId] = useState<string | null>(null);
 
-  // Estados para modales
   const [reserveRental, setReserveRental] = useState<any | null>(null);
   const [returnRental, setReturnRental] = useState<any | null>(null);
   const [editRental, setEditRental] = useState<any | null>(null);
@@ -50,8 +49,14 @@ export default function RentalsDashboardPage() {
     loadData();
 
     const channel = supabase
-      .channel('realtime-rentals')
+      .channel('realtime-rentals-dashboard')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rentals' }, () => {
+        loadData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rental_items' }, () => {
+        loadData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bikes_inventory' }, () => {
         loadData();
       })
       .subscribe();
@@ -114,18 +119,18 @@ export default function RentalsDashboardPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-extrabold text-white">Alquileres y Reservas</h1>
-          <p className="text-sm text-slate-400">Mostrador de Travel Bikes</p>
+          <h1 className="text-2xl font-black uppercase tracking-wider text-slate-900 dark:text-white">Alquileres y Reservas</h1>
+          <p className="text-sm text-orange-600 dark:text-orange-500 font-semibold tracking-wide">Mostrador de Travel Bikes</p>
         </div>
         <button
           onClick={loadData}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:bg-slate-800 text-sm font-semibold"
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 hover:border-orange-500/50 hover:bg-slate-50 dark:hover:bg-zinc-800 text-slate-800 dark:text-white text-sm font-bold transition shadow-md"
         >
-          <RefreshCw className="w-4 h-4" /> Actualizar
+          <RefreshCw className="w-4 h-4 text-orange-600 dark:text-orange-500" /> Actualizar
         </button>
       </div>
 
-      <div className="grid grid-cols-3 gap-3 bg-slate-900 p-1.5 rounded-2xl border border-slate-800 max-w-2xl">
+      <div className="grid grid-cols-3 gap-2 bg-white dark:bg-zinc-900 p-1.5 rounded-2xl border border-slate-200 dark:border-zinc-800 w-full max-w-2xl shadow-lg transition-colors overflow-x-auto">
         {[
           { id: 'pending', label: 'Pendientes', count: rentals.filter((r) => r.status === 'pending').length, icon: Clock },
           { id: 'active', label: 'Activos', count: rentals.filter((r) => r.status === 'active').length, icon: CheckCircle },
@@ -137,62 +142,67 @@ export default function RentalsDashboardPage() {
             <button
               key={tab.id}
               onClick={() => setFilterTab(tab.id as any)}
-              className={`flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-bold transition ${
-                active ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-white'
+              className={`flex items-center justify-center gap-1.5 sm:gap-2 py-3 px-2 sm:px-4 rounded-xl text-xs sm:text-sm font-extrabold uppercase tracking-wider transition whitespace-nowrap ${
+                active
+                  ? 'bg-orange-600 text-white shadow-md shadow-orange-600/30 dark:shadow-orange-950/50'
+                  : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <Icon className="w-4 h-4" />
-              <span>{tab.label}</span>
-              <span className="px-2 py-0.5 text-xs rounded-full bg-slate-950/60">{tab.count}</span>
+              <Icon className="w-4 h-4 shrink-0" />
+              <span className="truncate">{tab.label}</span>
+              <span className={`px-1.5 sm:px-2 py-0.5 text-[10px] sm:text-xs rounded-full font-black shrink-0 ${active ? 'bg-zinc-950/70 text-orange-300' : 'bg-slate-100 dark:bg-zinc-950 text-slate-600 dark:text-zinc-400'}`}>
+                {tab.count}
+              </span>
             </button>
           );
         })}
       </div>
 
       {loading ? (
-        <p className="text-slate-400 py-10 text-center">Cargando...</p>
+        <p className="text-slate-500 dark:text-zinc-400 py-10 text-center font-medium">Cargando...</p>
       ) : filteredRentals.length === 0 ? (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center text-slate-400">
+        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-12 text-center text-slate-500 dark:text-zinc-400 shadow-md">
           No hay registros en esta sección.
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {filteredRentals.map((rental) => (
-            <div key={rental.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between space-y-5">
+            <div key={rental.id} className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-6 flex flex-col justify-between space-y-5 shadow-xl relative overflow-hidden transition-colors">
+              <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-zinc-900 dark:from-white via-orange-500 to-red-600" />
               <div className="space-y-4">
-                <div className="flex items-start justify-between border-b border-slate-800 pb-4">
+                <div className="flex items-start justify-between border-b border-slate-100 dark:border-zinc-800 pb-4">
                   <div>
                     <div className="flex items-center gap-2">
-                      <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                        <User className="w-5 h-5 text-sky-400" /> {rental.customer_name}
+                      <h3 className="text-xl font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                        <User className="w-5 h-5 text-orange-600 dark:text-orange-500" /> {rental.customer_name}
                       </h3>
                       {(rental.status === 'active' || rental.status === 'reserved') && (
                         <button
                           onClick={() => setEditRental(rental)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-sky-600 text-slate-200 hover:text-white text-xs font-semibold transition"
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-zinc-800 hover:bg-orange-600 text-slate-700 dark:text-zinc-200 hover:text-white text-xs font-bold transition"
                         >
                           <Edit3 className="w-3.5 h-3.5" /> Editar
                         </button>
                       )}
                     </div>
-                    <p className="text-xs text-slate-400 mt-1">
-                      DNI: <strong className="text-slate-200">{rental.customer_dni}</strong> • <Phone className="w-3 h-3 inline" /> {rental.customer_phone}
+                    <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">
+                      DNI: <strong className="text-slate-900 dark:text-white">{rental.customer_dni}</strong> • <Phone className="w-3 h-3 inline text-orange-600 dark:text-orange-500" /> {rental.customer_phone}
                     </p>
                     {rental.status === 'reserved' && (
-                      <p className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-bold">
+                      <p className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-orange-50 dark:bg-orange-500/10 border border-orange-200 dark:border-orange-500/30 text-orange-700 dark:text-orange-400 text-xs font-bold">
                         <Calendar className="w-3.5 h-3.5" /> Retiro: {rental.start_date}
                       </p>
                     )}
                   </div>
                   <div className="text-right space-y-1">
-                    <span className="text-2xl font-extrabold text-emerald-400 block">
+                    <span className="text-2xl font-black text-orange-600 dark:text-orange-500 block">
                       ${Number(rental.total_amount).toLocaleString('es-AR')}
                     </span>
-                    <p className="text-xs text-slate-400">
+                    <p className="text-xs text-slate-500 dark:text-zinc-400 font-medium">
                       {paymentLabels[rental.payment_method]} • {rental.days_count} día/s
                     </p>
                     {rental.status !== 'pending' && (
-                      <span className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-extrabold tracking-wide uppercase ${rental.is_paid ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'}`}>
+                      <span className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-extrabold tracking-wide uppercase ${rental.is_paid ? 'bg-slate-900 dark:bg-white/10 text-white border border-slate-800 dark:border-white/30' : 'bg-red-100 dark:bg-red-600/20 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-500/40'}`}>
                         {rental.is_paid ? '✓ Pagado' : '⚠ Pendiente'}
                       </span>
                     )}
@@ -200,26 +210,26 @@ export default function RentalsDashboardPage() {
                 </div>
 
                 <div className="space-y-2.5">
-                  <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Ítems:</p>
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-zinc-400">Ítems:</p>
                   {rental.rental_items.map((item: any) => {
                     const matchingBikes = availableBikesOnly.filter((b) => b.category_id === item.category_id);
                     return (
-                      <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 bg-slate-950 p-3 rounded-xl border border-slate-800">
+                      <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 dark:bg-zinc-950 p-3 rounded-xl border border-slate-200 dark:border-zinc-800">
                         <div className="text-sm">
-                          <span className="font-bold text-white">{item.catalog_categories?.name}</span>
-                          <span className="text-xs text-sky-400 ml-2">
+                          <span className="font-bold text-slate-900 dark:text-white">{item.catalog_categories?.name}</span>
+                          <span className="text-xs text-orange-600 dark:text-orange-400 font-semibold ml-2">
                             {[item.catalog_categories?.wheel_size, item.catalog_categories?.frame_size ? `Talle ${item.catalog_categories.frame_size}` : null].filter(Boolean).join(' • ')}
                           </span>
                         </div>
                         {rental.status === 'active' ? (
-                          <span className="px-3 py-1 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-800 text-xs font-bold">
+                          <span className="px-3 py-1 rounded-lg bg-orange-50 dark:bg-orange-950/60 text-orange-800 dark:text-orange-300 border border-orange-200 dark:border-orange-700/60 text-xs font-bold">
                             Unidad: {item.bikes_inventory?.internal_code || 'Asignada'}
                           </span>
                         ) : (
                           <select
                             value={item.bike_id || ''}
                             onChange={(e) => handleAssignBike(item.id, e.target.value)}
-                            className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs font-semibold text-white focus:border-sky-500 outline-none"
+                            className="bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-900 dark:text-white focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
                           >
                             <option value="">-- Asignar unidad --</option>
                             {item.bike_id && item.bikes_inventory && (
@@ -235,63 +245,63 @@ export default function RentalsDashboardPage() {
                   })}
                 </div>
 
-                <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                    <DollarSign className="w-4 h-4 text-emerald-400" /> Pago:
+                <div className="bg-slate-50 dark:bg-zinc-950 p-3.5 rounded-xl border border-slate-200 dark:border-zinc-800 flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-zinc-300 flex items-center gap-1.5">
+                    <DollarSign className="w-4 h-4 text-orange-600 dark:text-orange-500" /> Pago:
                   </span>
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handleTogglePaid(rental.id, true)}
-                      className={`px-4 py-1.5 rounded-lg text-xs font-extrabold transition ${rental.is_paid ? 'bg-emerald-600 text-white ring-2 ring-emerald-400' : 'bg-slate-900 text-slate-400 border border-slate-800'}`}
+                      className={`px-4 py-1.5 rounded-lg text-xs font-extrabold transition ${rental.is_paid ? 'bg-orange-600 text-white ring-2 ring-orange-400' : 'bg-white dark:bg-zinc-900 text-slate-600 dark:text-zinc-400 border border-slate-200 dark:border-zinc-800 hover:text-slate-900 dark:hover:text-white'}`}
                     >
                       SÍ
                     </button>
                     <button
                       onClick={() => handleTogglePaid(rental.id, false)}
-                      className={`px-4 py-1.5 rounded-lg text-xs font-extrabold transition ${!rental.is_paid ? 'bg-rose-600 text-white ring-2 ring-rose-400' : 'bg-slate-900 text-slate-400 border border-slate-800'}`}
+                      className={`px-4 py-1.5 rounded-lg text-xs font-extrabold transition ${!rental.is_paid ? 'bg-red-600 text-white ring-2 ring-red-400' : 'bg-white dark:bg-zinc-900 text-slate-600 dark:text-zinc-400 border border-slate-200 dark:border-zinc-800 hover:text-slate-900 dark:hover:text-white'}`}
                     >
                       PENDIENTE DE PAGO
                     </button>
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between bg-slate-950/60 px-3 py-2 rounded-xl border border-slate-800/80 text-xs">
-                  <span className="text-slate-400 truncate">
-                    <FileText className="w-3.5 h-3.5 inline mr-1 text-slate-500" />
+                <div className="flex items-center justify-between bg-slate-50/80 dark:bg-zinc-950/60 px-3 py-2 rounded-xl border border-slate-200 dark:border-zinc-800/80 text-xs">
+                  <span className="text-slate-600 dark:text-zinc-400 truncate">
+                    <FileText className="w-3.5 h-3.5 inline mr-1 text-orange-600 dark:text-orange-500" />
                     {rental.notes || 'Sin notas'}
                   </span>
-                  <button onClick={() => handleUpdateNotes(rental.id, rental.notes)} className="text-sky-400 hover:underline font-semibold ml-3 shrink-0">
+                  <button onClick={() => handleUpdateNotes(rental.id, rental.notes)} className="text-orange-600 dark:text-orange-400 hover:text-orange-700 dark:hover:text-orange-300 hover:underline font-bold ml-3 shrink-0">
                     {rental.notes ? 'Editar' : '+ Nota'}
                   </button>
                 </div>
               </div>
 
-              <div className="pt-3 border-t border-slate-800 flex flex-wrap gap-2 justify-end">
+              <div className="pt-3 border-t border-slate-100 dark:border-zinc-800 flex flex-wrap gap-2 justify-end">
                 {rental.status === 'pending' && (
                   <>
-                    <button onClick={() => handleChangeStatus(rental, 'cancelled')} className="px-3 py-2 rounded-xl bg-slate-800 text-xs font-semibold">
+                    <button onClick={() => handleChangeStatus(rental, 'cancelled')} className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-red-100 dark:hover:bg-red-950 text-slate-700 dark:text-zinc-300 hover:text-red-700 dark:hover:text-red-300 text-xs font-bold transition">
                       Cancelar
                     </button>
-                    <button onClick={() => setReserveRental(rental)} className="px-4 py-2 rounded-xl bg-amber-600/20 text-amber-300 text-xs font-bold border border-amber-500/40">
+                    <button onClick={() => setReserveRental(rental)} className="px-4 py-2 rounded-xl bg-slate-50 dark:bg-zinc-950 hover:bg-slate-100 dark:hover:bg-zinc-800 text-orange-600 dark:text-orange-400 text-xs font-bold border border-orange-200 dark:border-orange-500/40 transition">
                       Reservar
                     </button>
-                    <button onClick={() => handleChangeStatus(rental, 'active')} className="px-5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold">
+                    <button onClick={() => handleChangeStatus(rental, 'active')} className="px-5 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-extrabold uppercase tracking-wider transition shadow-md shadow-orange-600/30 dark:shadow-orange-950/50">
                       Activar
                     </button>
                   </>
                 )}
                 {rental.status === 'reserved' && (
                   <>
-                    <button onClick={() => handleChangeStatus(rental, 'cancelled')} className="px-3 py-2 rounded-xl bg-slate-800 text-xs font-semibold">
+                    <button onClick={() => handleChangeStatus(rental, 'cancelled')} className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-red-100 dark:hover:bg-red-950 text-slate-700 dark:text-zinc-300 hover:text-red-700 dark:hover:text-red-300 text-xs font-bold transition">
                       Cancelar
                     </button>
-                    <button onClick={() => handleChangeStatus(rental, 'active')} className="px-5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold">
+                    <button onClick={() => handleChangeStatus(rental, 'active')} className="px-5 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-extrabold uppercase tracking-wider transition shadow-md shadow-orange-600/30 dark:shadow-orange-950/50">
                       Entregar (Activar)
                     </button>
                   </>
                 )}
                 {rental.status === 'active' && (
-                  <button onClick={() => handleReturnClick(rental)} className="w-full py-2.5 rounded-xl bg-sky-600 text-white text-sm font-bold">
+                  <button onClick={() => handleReturnClick(rental)} className="w-full py-2.5 rounded-xl bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-500 hover:to-red-500 text-white text-sm font-extrabold uppercase tracking-wider transition shadow-lg shadow-orange-600/30 dark:shadow-orange-950/50">
                     Registrar Devolución
                   </button>
                 )}

@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useState, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { Bike, Zap, Caravan, Plus, Minus, CheckCircle2, Users, Calendar, ShoppingBag, CreditCard, Banknote, ArrowRightLeft, Clock } from 'lucide-react';
+import { Bike, Zap, Caravan, Plus, Minus, CheckCircle2, Users, Calendar, ShoppingBag, CreditCard, Banknote, ArrowRightLeft, Clock, Sun, Moon, Trash2, LayoutDashboard } from 'lucide-react';
 
 interface StockVariant {
   category_id: string;
@@ -19,10 +20,12 @@ interface StockVariant {
 }
 
 export default function KioskCheckInPage() {
+  const router = useRouter();
   const [variants, setVariants] = useState<StockVariant[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [darkMode, setDarkMode] = useState(true);
 
   const [activeTab, setActiveTab] = useState<'bikes' | 'accessory'>('bikes');
   const [selectedQuantities, setSelectedQuantities] = useState<Record<string, number>>({});
@@ -37,9 +40,32 @@ export default function KioskCheckInPage() {
     rental_type: 'day' as '2h' | 'day',
     days_count: 1,
     start_date: todayStr,
-    start_time: '09:00', // Horario por defecto
+    start_time: '09:00',
     payment_method: 'cash' as 'cash' | 'debit' | 'transfer',
   });
+
+  useEffect(() => {
+    const storedTheme = localStorage.getItem('theme');
+    if (storedTheme === 'light') {
+      setDarkMode(false);
+      document.documentElement.classList.remove('dark');
+    } else {
+      setDarkMode(true);
+      document.documentElement.classList.add('dark');
+    }
+  }, []);
+
+  const toggleTheme = () => {
+    if (darkMode) {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
+      setDarkMode(false);
+    } else {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
+      setDarkMode(true);
+    }
+  };
 
   const fetchAvailableStock = async () => {
     setLoading(true);
@@ -56,6 +82,20 @@ export default function KioskCheckInPage() {
 
   useEffect(() => {
     fetchAvailableStock();
+
+    const channel = supabase
+      .channel('realtime-kiosk-stock')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bikes_inventory' }, () => {
+        fetchAvailableStock();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'catalog_categories' }, () => {
+        fetchAvailableStock();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const groupedModels = useMemo(() => {
@@ -75,6 +115,15 @@ export default function KioskCheckInPage() {
       const current = prev[categoryId] || 0;
       const next = Math.max(0, Math.min(maxAvailable, current + delta));
       return { ...prev, [categoryId]: next };
+    });
+  };
+
+  // Función para vaciar por completo un ítem del carrito con el icono de basura
+  const removeItemCompletely = (categoryId: string) => {
+    setSelectedQuantities((prev) => {
+      const updated = { ...prev };
+      delete updated[categoryId];
+      return updated;
     });
   };
 
@@ -124,7 +173,6 @@ export default function KioskCheckInPage() {
       const initialStatus = formData.start_date > todayStr ? 'reserved' : 'pending';
       const dbPaymentMethod = formData.payment_method === 'debit' ? 'bank' : formData.payment_method;
       
-      // Guardar la hora exacta con minutos en las notas si es de 2 horas
       const timeNote = formData.rental_type === '2h' ? `[Horario: ${formData.start_time} hs - 2 horas]` : null;
 
       const { error: rentalError } = await supabase.from('rentals').insert({
@@ -193,36 +241,38 @@ export default function KioskCheckInPage() {
   if (submitted) {
     const isReservation = formData.start_date > todayStr;
     return (
-      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center">
-        <CheckCircle2 className="w-24 h-24 text-emerald-400 mb-6 animate-bounce" />
-        <h1 className="text-4xl font-bold mb-3">{isReservation ? '¡Reserva Registrada!' : '¡Pedido Registrado!'}</h1>
-        <p className="text-xl text-slate-300 max-w-md mb-8">
-          Gracias, <span className="font-semibold text-white">{formData.customer_name}</span>.{' '}
+      <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-slate-900 dark:text-white flex flex-col items-center justify-center p-6 text-center transition-colors">
+        <CheckCircle2 className="w-24 h-24 text-orange-600 dark:text-orange-500 mb-6 animate-bounce" />
+        <h1 className="text-4xl font-extrabold uppercase tracking-wider mb-3">
+          {isReservation ? '¡Reserva Registrada!' : '¡Pedido Registrado!'}
+        </h1>
+        <p className="text-xl text-slate-600 dark:text-zinc-300 max-w-md mb-8">
+          Gracias, <span className="font-bold text-slate-900 dark:text-white">{formData.customer_name}</span>.{' '}
           {isReservation
             ? `Tu reserva quedó agendada para el ${formData.start_date}.`
             : 'Devolvele la tablet al vendedor para retirar tus bicicletas.'}
         </p>
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 mb-8 w-full max-w-md">
-          <p className="text-slate-400 text-sm">Total a abonar</p>
-          <p className="text-4xl font-extrabold text-emerald-400 mt-1">
+        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-xl rounded-2xl p-6 mb-8 w-full max-w-md relative overflow-hidden">
+          <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-zinc-900 dark:from-white via-orange-500 to-red-600" />
+          <p className="text-slate-500 dark:text-zinc-400 text-sm uppercase tracking-wider font-semibold">Total a abonar</p>
+          <p className="text-4xl font-black text-orange-600 dark:text-orange-500 mt-1">
             ${totalAmount.toLocaleString('es-AR')}
           </p>
         </div>
         <button
           onClick={resetKiosk}
-          className="px-8 py-4 bg-sky-600 hover:bg-sky-500 rounded-xl font-bold text-lg transition"
+          className="px-8 py-4 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-extrabold uppercase tracking-wider text-lg transition shadow-lg shadow-orange-600/30"
         >
-          Nuevo Cliente
+          Continuar
         </button>
       </div>
     );
   }
 
-  // Generar horarios de 8:00 a 21:00 cada 15 minutos
   const hoursOptions = [];
   for (let h = 8; h <= 21; h++) {
     for (let m = 0; m < 60; m += 15) {
-      if (h === 21 && m > 0) break; // Tope a las 21:00
+      if (h === 21 && m > 0) break;
       const hourStr = h < 10 ? `0${h}` : `${h}`;
       const minStr = m === 0 ? '00' : `${m}`;
       hoursOptions.push(`${hourStr}:${minStr}`);
@@ -230,21 +280,49 @@ export default function KioskCheckInPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 max-w-6xl mx-auto">
-      <header className="mb-6 border-b border-slate-800 pb-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-extrabold tracking-tight text-white">
-            Travel Bikes <span className="text-sky-400">Puerto Madryn</span>
-          </h1>
-          <p className="text-slate-400 text-sm mt-1">Elegí la duración, fecha, horario con minutos y método de pago</p>
+    <div className="min-h-screen bg-slate-100 dark:bg-zinc-950 text-slate-900 dark:text-zinc-100 p-4 md:p-8 max-w-6xl mx-auto transition-colors">
+      <header className="mb-6 pb-4">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 px-2">
+          <div>
+            <div className="flex items-center gap-2.5">
+              <img 
+                src="/logo.png" 
+                alt="Travel Bikes Logo" 
+                className="h-20 md:h-22 w-auto object-contain" 
+              />
+            </div>
+            <p className="text-orange-600 dark:text-orange-500 font-extrabold tracking-widest uppercase text-xs mt-1">
+              Puerto Madryn
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => router.push('/dashboard/rentals')}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-slate-800 dark:text-zinc-200 hover:border-orange-500 text-xs font-extrabold uppercase tracking-wider transition shadow-sm"
+              title="Volver al panel de administración"
+            >
+              <LayoutDashboard className="w-4 h-4 text-orange-600 dark:text-orange-500" /> Ir al Dashboard
+            </button>
+
+            <button
+              onClick={toggleTheme}
+              className="p-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-slate-800 dark:text-zinc-200 hover:border-orange-500 transition shadow-sm flex items-center justify-center shrink-0"
+              title="Cambiar tema claro / oscuro"
+            >
+              {darkMode ? <Sun className="w-4 h-4 text-orange-500" /> : <Moon className="w-4 h-4 text-orange-600" />}
+            </button>
+          </div>
         </div>
+
+        {/* Franja tricolor dinámica según el modo claro u oscuro */}
+        <div className="mt-5 w-full h-2 bg-gradient-to-r from-zinc-900 dark:from-white via-orange-500 to-red-600 rounded-full shadow-md" />
       </header>
 
       <form onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         <div className="lg:col-span-7 space-y-6">
-          <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 space-y-4">
+          <div className="bg-white dark:bg-zinc-900 p-5 rounded-2xl border border-slate-200 dark:border-zinc-800 space-y-4 shadow-xl transition-colors">
             <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-zinc-400 mb-2">
                 Duración del Alquiler
               </label>
               <div className="grid grid-cols-2 gap-2">
@@ -261,8 +339,8 @@ export default function KioskCheckInPage() {
                       onClick={() => setFormData({ ...formData, rental_type: t.id as any })}
                       className={`flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-sm border transition ${
                         active
-                          ? 'bg-sky-600 border-sky-400 text-white shadow-lg'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                          ? 'bg-orange-600 border-orange-500 text-white shadow-md shadow-orange-600/30 dark:shadow-orange-950/50'
+                          : 'bg-slate-50 dark:bg-zinc-950 border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
                       }`}
                     >
                       <Icon className="w-4 h-4" />
@@ -275,8 +353,8 @@ export default function KioskCheckInPage() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="flex items-center gap-2 text-xs text-slate-400 mb-1.5 font-semibold">
-                  <Calendar className="w-4 h-4 text-sky-400" /> Fecha de inicio / retiro
+                <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-zinc-300 mb-1.5 font-bold">
+                  <Calendar className="w-4 h-4 text-orange-600 dark:text-orange-500" /> Fecha de inicio / retiro
                 </label>
                 <input
                   type="date"
@@ -284,19 +362,19 @@ export default function KioskCheckInPage() {
                   min={todayStr}
                   value={formData.start_date}
                   onChange={(e) => setFormData({ ...formData, start_date: e.target.value })}
-                  className="w-full p-3.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-bold text-sm focus:border-sky-500 outline-none"
+                  className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-white font-bold text-sm focus:border-orange-600 dark:focus:border-orange-500 outline-none transition dark:[color-scheme:dark]"
                 />
               </div>
 
               {formData.rental_type === '2h' ? (
                 <div>
-                  <label className="flex items-center gap-2 text-xs text-slate-400 mb-1.5 font-semibold">
-                    <Clock className="w-4 h-4 text-sky-400" /> Horario (08:00 a 21:00 hs)
+                  <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-zinc-300 mb-1.5 font-bold">
+                    <Clock className="w-4 h-4 text-orange-600 dark:text-orange-500" /> Horario (08:00 a 21:00 hs)
                   </label>
                   <select
                     value={formData.start_time}
                     onChange={(e) => setFormData({ ...formData, start_time: e.target.value })}
-                    className="w-full p-3.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-bold text-sm focus:border-sky-500 outline-none"
+                    className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-white font-bold text-sm focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
                   >
                     {hoursOptions.map((time) => (
                       <option key={time} value={time}>
@@ -307,22 +385,22 @@ export default function KioskCheckInPage() {
                 </div>
               ) : (
                 <div>
-                  <label className="flex items-center gap-2 text-xs text-slate-400 mb-1.5 font-semibold">
-                    <Calendar className="w-4 h-4 text-sky-400" /> Cantidad de días
+                  <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-zinc-300 mb-1.5 font-bold">
+                    <Calendar className="w-4 h-4 text-orange-600 dark:text-orange-500" /> Cantidad de días
                   </label>
-                  <div className="flex items-center justify-between bg-slate-950 rounded-xl p-1.5 border border-slate-700">
+                  <div className="flex items-center justify-between bg-slate-50 dark:bg-zinc-950 rounded-xl p-1.5 border border-slate-300 dark:border-zinc-700">
                     <button
                       type="button"
                       onClick={() => setFormData({ ...formData, days_count: Math.max(1, formData.days_count - 1) })}
-                      className="p-2 bg-slate-800 rounded-lg active:scale-95"
+                      className="p-2 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 text-slate-800 dark:text-white rounded-lg active:scale-95 transition"
                     >
                       <Minus className="w-4 h-4" />
                     </button>
-                    <span className="text-lg font-bold">{formData.days_count}</span>
+                    <span className="text-lg font-extrabold text-slate-900 dark:text-white">{formData.days_count}</span>
                     <button
                       type="button"
                       onClick={() => setFormData({ ...formData, days_count: formData.days_count + 1 })}
-                      className="p-2 bg-slate-800 rounded-lg active:scale-95"
+                      className="p-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg active:scale-95 transition"
                     >
                       <Plus className="w-4 h-4" />
                     </button>
@@ -332,22 +410,22 @@ export default function KioskCheckInPage() {
             </div>
 
             <div>
-              <label className="flex items-center gap-2 text-xs text-slate-400 mb-2">
-                <Users className="w-4 h-4 text-sky-400" /> ¿Cuántas personas son?
+              <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-zinc-300 mb-2 font-bold">
+                <Users className="w-4 h-4 text-orange-600 dark:text-orange-500" /> ¿Cuántas personas son?
               </label>
-              <div className="flex items-center justify-between bg-slate-950 rounded-xl p-2 border border-slate-800 max-w-xs">
+              <div className="flex items-center justify-between bg-slate-50 dark:bg-zinc-950 rounded-xl p-2 border border-slate-300 dark:border-zinc-800 max-w-xs">
                 <button
                   type="button"
                   onClick={() => setFormData({ ...formData, people_count: Math.max(1, formData.people_count - 1) })}
-                  className="p-2 bg-slate-800 rounded-lg active:scale-95"
+                  className="p-2 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 text-slate-800 dark:text-white rounded-lg active:scale-95 transition"
                 >
                   <Minus className="w-4 h-4" />
                 </button>
-                <span className="text-xl font-bold">{formData.people_count}</span>
+                <span className="text-xl font-extrabold text-slate-900 dark:text-white">{formData.people_count}</span>
                 <button
                   type="button"
                   onClick={() => setFormData({ ...formData, people_count: formData.people_count + 1 })}
-                  className="p-2 bg-slate-800 rounded-lg active:scale-95"
+                  className="p-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg active:scale-95 transition"
                 >
                   <Plus className="w-4 h-4" />
                 </button>
@@ -355,7 +433,7 @@ export default function KioskCheckInPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 bg-slate-900 p-1.5 rounded-2xl border border-slate-800">
+          <div className="grid grid-cols-2 gap-2 bg-white dark:bg-zinc-900 p-1.5 rounded-2xl border border-slate-200 dark:border-zinc-800 shadow-md transition-colors">
             {[
               { id: 'bikes', label: 'Bicicletas', icon: Bike },
               { id: 'accessory', label: 'Accesorios', icon: Caravan },
@@ -367,8 +445,10 @@ export default function KioskCheckInPage() {
                   key={tab.id}
                   type="button"
                   onClick={() => setActiveTab(tab.id as any)}
-                  className={`flex items-center justify-center gap-2 py-3.5 px-4 rounded-xl font-bold text-sm transition ${
-                    isActive ? 'bg-sky-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'
+                  className={`flex items-center justify-center gap-2 py-3.5 px-4 rounded-xl font-extrabold uppercase tracking-wider text-xs transition ${
+                    isActive
+                      ? 'bg-orange-600 text-white shadow-md shadow-orange-600/30 dark:shadow-orange-950/50'
+                      : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
                   <Icon className="w-5 h-5" />
@@ -379,26 +459,26 @@ export default function KioskCheckInPage() {
           </div>
 
           {loading ? (
-            <p className="text-slate-400 py-8 text-center">Cargando catálogo...</p>
+            <p className="text-slate-500 dark:text-zinc-400 py-8 text-center font-medium">Cargando catálogo...</p>
           ) : (
             <div className="space-y-4">
               {Object.entries(groupedModels).map(([modelName, modelVariants]) => (
-                <div key={modelName} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+                <div key={modelName} className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-5 space-y-4 shadow-xl transition-colors">
                   <div>
                     <div className="flex items-center gap-2">
-                      <h3 className="text-xl font-bold text-white">{modelName}</h3>
+                      <h3 className="text-xl font-extrabold text-slate-900 dark:text-white tracking-tight">{modelName}</h3>
                       {modelVariants[0].type === 'ebike' && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-400 border border-orange-200 dark:border-orange-500/30">
                           <Zap className="w-3.5 h-3.5" /> Eléctrica
                         </span>
                       )}
                     </div>
                     {modelVariants[0].description && (
-                      <p className="text-xs text-slate-400 mt-0.5">{modelVariants[0].description}</p>
+                      <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">{modelVariants[0].description}</p>
                     )}
                   </div>
 
-                  <div className="divide-y divide-slate-800/80">
+                  <div className="divide-y divide-slate-100 dark:divide-zinc-800/80">
                     {modelVariants.map((variant) => {
                       const qty = selectedQuantities[variant.category_id] || 0;
                       const outOfStock = variant.available_count === 0;
@@ -412,22 +492,25 @@ export default function KioskCheckInPage() {
                       }
 
                       return (
-                        <div key={variant.category_id} className="py-3 first:pt-1 last:pb-0 flex items-center justify-between gap-4">
+                        <div key={variant.category_id} className="py-3.5 first:pt-1 last:pb-0 flex items-center justify-between gap-4">
                           <div className="flex flex-wrap items-center gap-2">
                             {variant.wheel_size && (
-                              <span className="px-2.5 py-1 rounded-lg bg-sky-950 text-sky-300 border border-sky-800 text-xs font-bold">
+                              <span className="px-2.5 py-1 rounded-lg bg-orange-50 dark:bg-zinc-950 text-orange-700 dark:text-orange-400 border border-orange-200 dark:border-orange-500/40 text-xs font-extrabold">
                                 {variant.wheel_size}
                               </span>
                             )}
                             {variant.frame_size && (
-                              <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-200 text-xs font-semibold">
+                              <span className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-white text-xs font-bold">
                                 Talle {variant.frame_size}
                               </span>
                             )}
-                            <span className="text-emerald-400 font-bold text-sm ml-1">
-                              ${Number(displayPrice).toLocaleString('es-AR')} {formData.rental_type === '2h' ? '/ 2hs' : '/ día'}
+                            <span className="text-slate-900 dark:text-white font-black text-sm ml-1">
+                              ${Number(displayPrice).toLocaleString('es-AR')}{' '}
+                              <span className="text-orange-600 dark:text-orange-500 font-bold text-xs">
+                                {formData.rental_type === '2h' ? '/ 2hs' : '/ día'}
+                              </span>
                             </span>
-                            <span className="text-xs text-slate-500">
+                            <span className={`text-xs font-bold ${outOfStock ? 'text-red-600 dark:text-red-500' : 'text-slate-500 dark:text-zinc-400'}`}>
                               ({outOfStock ? 'Agotado' : `${variant.available_count} disp.`})
                             </span>
                           </div>
@@ -437,16 +520,16 @@ export default function KioskCheckInPage() {
                               type="button"
                               disabled={qty === 0}
                               onClick={() => updateQuantity(variant.category_id, -1, variant.available_count)}
-                              className="p-2.5 rounded-xl bg-slate-800 disabled:opacity-25 active:scale-95"
+                              className="p-2.5 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-800 dark:text-white disabled:opacity-25 active:scale-95 transition"
                             >
                               <Minus className="w-4 h-4" />
                             </button>
-                            <span className="w-6 text-center text-lg font-bold">{qty}</span>
+                            <span className="w-6 text-center text-lg font-extrabold text-slate-900 dark:text-white">{qty}</span>
                             <button
                               type="button"
                               disabled={qty >= variant.available_count || outOfStock}
                               onClick={() => updateQuantity(variant.category_id, 1, variant.available_count)}
-                              className="p-2.5 rounded-xl bg-sky-600 text-white disabled:opacity-25 active:scale-95"
+                              className="p-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 text-white disabled:opacity-25 active:scale-95 transition shadow-md shadow-orange-600/30 dark:shadow-orange-950/40"
                             >
                               <Plus className="w-4 h-4" />
                             </button>
@@ -462,8 +545,8 @@ export default function KioskCheckInPage() {
         </div>
 
         <div className="lg:col-span-5 space-y-6">
-          <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800 space-y-3">
-            <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">
+          <div className="bg-white dark:bg-zinc-900 p-5 rounded-2xl border border-slate-200 dark:border-zinc-800 space-y-3 shadow-xl transition-colors">
+            <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-zinc-400">
               Método de Pago (Aplica tarifa automática)
             </label>
             <div className="grid grid-cols-3 gap-2">
@@ -481,8 +564,8 @@ export default function KioskCheckInPage() {
                     onClick={() => setFormData({ ...formData, payment_method: m.id as any })}
                     className={`flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl font-bold text-xs border transition ${
                       active
-                        ? 'bg-sky-600 border-sky-400 text-white shadow-lg'
-                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                        ? 'bg-orange-600 border-orange-500 text-white shadow-md shadow-orange-600/30 dark:shadow-orange-950/50'
+                        : 'bg-slate-50 dark:bg-zinc-950 border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white'
                     }`}
                   >
                     <Icon className="w-4 h-4" />
@@ -493,52 +576,64 @@ export default function KioskCheckInPage() {
             </div>
           </div>
 
-          <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2 mb-3">
-              <ShoppingBag className="w-4 h-4 text-sky-400" /> Tu Selección ({totalSelectedItems})
+          <div className="bg-white dark:bg-zinc-900 p-5 rounded-2xl border border-slate-200 dark:border-zinc-800 shadow-xl transition-colors">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-zinc-400 flex items-center gap-2 mb-3">
+              <ShoppingBag className="w-4 h-4 text-orange-600 dark:text-orange-500" /> Tu Selección ({totalSelectedItems})
             </h2>
             {selectedList.length === 0 ? (
-              <p className="text-sm text-slate-500 italic">Todavía no elegiste bicicletas ni accesorios.</p>
+              <p className="text-sm text-slate-400 dark:text-zinc-500 italic">Todavía no elegiste bicicletas ni accesorios.</p>
             ) : (
               <ul className="space-y-2 text-sm">
                 {selectedList.map((item) => (
-                  <li key={item.category_id} className="flex justify-between items-center bg-slate-950 px-3 py-2 rounded-xl border border-slate-800">
-                    <div>
-                      <span className="font-bold text-sky-400">{item.qty}x</span>{' '}
-                      <span className="font-medium">{item.name}</span>{' '}
-                      <span className="text-xs text-slate-400">
+                  <li key={item.category_id} className="flex justify-between items-center bg-slate-50 dark:bg-zinc-950 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-zinc-800">
+                    <div className="flex-1 pr-2">
+                      <span className="font-extrabold text-orange-600 dark:text-orange-500">{item.qty}x</span>{' '}
+                      <span className="font-bold text-slate-900 dark:text-white">{item.name}</span>{' '}
+                      <span className="text-xs text-slate-500 dark:text-zinc-400 font-medium">
                         {[item.wheel_size, item.frame_size ? `Talle ${item.frame_size}` : null]
                           .filter(Boolean)
                           .join(' • ')}
                       </span>
                     </div>
-                    <span className="font-semibold text-slate-200">
-                      ${item.subtotal.toLocaleString('es-AR')}
-                    </span>
+                    <div className="flex items-center gap-3">
+                      <span className="font-black text-slate-900 dark:text-white">
+                        ${item.subtotal.toLocaleString('es-AR')}
+                      </span>
+                      {/* Botón de papelera / basura para quitar el ítem */}
+                      <button
+                        type="button"
+                        onClick={() => removeItemCompletely(item.category_id)}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/50 transition"
+                        title="Quitar de la selección"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>
             )}
           </div>
 
-          <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 space-y-4">
-            <h2 className="text-xl font-bold">Tus Datos</h2>
+          <div className="bg-white dark:bg-zinc-900 p-6 rounded-2xl border border-slate-200 dark:border-zinc-800 space-y-4 shadow-xl relative overflow-hidden transition-colors">
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-orange-500 via-red-600 to-zinc-900 dark:to-white" />
+            <h2 className="text-xl font-extrabold text-slate-900 dark:text-white tracking-tight">Tus Datos</h2>
 
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Nombre y Apellido</label>
+              <label className="block text-xs text-slate-700 dark:text-zinc-300 font-bold mb-1">Nombre y Apellido</label>
               <input
                 type="text"
                 required
                 placeholder="Ej. Juan Pérez"
                 value={formData.customer_name}
                 onChange={(e) => setFormData({ ...formData, customer_name: e.target.value })}
-                className="w-full p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-base focus:border-sky-500 outline-none"
+                className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 text-slate-900 dark:text-white text-base focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
               />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-slate-400 mb-1">DNI / Pasaporte</label>
+                <label className="block text-xs text-slate-700 dark:text-zinc-300 font-bold mb-1">DNI / Pasaporte</label>
                 <input
                   type="text"
                   inputMode="numeric"
@@ -546,11 +641,11 @@ export default function KioskCheckInPage() {
                   placeholder="Sin puntos"
                   value={formData.customer_dni}
                   onChange={(e) => setFormData({ ...formData, customer_dni: e.target.value })}
-                  className="w-full p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-base focus:border-sky-500 outline-none"
+                  className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 text-slate-900 dark:text-white text-base focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
                 />
               </div>
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Teléfono / WhatsApp</label>
+                <label className="block text-xs text-slate-700 dark:text-zinc-300 font-bold mb-1">Teléfono / WhatsApp</label>
                 <input
                   type="tel"
                   inputMode="tel"
@@ -558,24 +653,24 @@ export default function KioskCheckInPage() {
                   placeholder="Ej. 2804123456"
                   value={formData.customer_phone}
                   onChange={(e) => setFormData({ ...formData, customer_phone: e.target.value })}
-                  className="w-full p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-base focus:border-sky-500 outline-none"
+                  className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 text-slate-900 dark:text-white text-base focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
                 />
               </div>
             </div>
 
-            <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
+            <div className="pt-4 border-t border-slate-200 dark:border-zinc-800 flex items-center justify-between gap-4">
               <div>
-                <p className="text-xs text-slate-400">
+                <p className="text-xs text-slate-500 dark:text-zinc-400 font-bold">
                   Total ({formData.rental_type === '2h' ? `2 Horas (${formData.start_time} hs)` : `${formData.days_count} día/s`})
                 </p>
-                <p className="text-3xl font-extrabold text-emerald-400">
+                <p className="text-3xl font-black text-orange-600 dark:text-orange-500">
                   ${totalAmount.toLocaleString('es-AR')}
                 </p>
               </div>
               <button
                 type="submit"
                 disabled={submitting || totalSelectedItems === 0}
-                className="px-6 py-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold rounded-xl text-base transition active:scale-95"
+                className="px-6 py-4 bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-500 hover:to-red-500 disabled:opacity-40 text-white font-extrabold uppercase tracking-wider rounded-xl text-sm transition active:scale-95 shadow-lg shadow-orange-600/30 dark:shadow-orange-950/60"
               >
                 {submitting ? 'Enviando...' : formData.start_date > todayStr ? 'Confirmar Reserva' : 'Confirmar Alquiler'}
               </button>

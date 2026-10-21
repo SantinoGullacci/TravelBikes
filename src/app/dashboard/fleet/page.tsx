@@ -32,7 +32,6 @@ export default function FleetDashboardPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
 
-  // Modal para agregar nueva unidad
   const [showAddModal, setShowAddModal] = useState(false);
   const [newBikeForm, setNewBikeForm] = useState({
     category_id: '',
@@ -73,9 +72,22 @@ export default function FleetDashboardPage() {
 
   useEffect(() => {
     fetchData();
+
+    const channel = supabase
+      .channel('realtime-fleet')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bikes_inventory' }, () => {
+        fetchData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'catalog_categories' }, () => {
+        fetchData();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
-  // Cambiar estado entre disponible y mantenimiento
   const handleUpdateStatus = async (bikeId: string, targetStatus: 'available' | 'maintenance') => {
     const { error } = await supabase
       .from('bikes_inventory')
@@ -89,7 +101,6 @@ export default function FleetDashboardPage() {
     }
   };
 
-  // Eliminar unidad
   const handleDeleteBike = async (bikeId: string, internalCode: string) => {
     if (!confirm(`¿Eliminar la unidad "${internalCode}" del inventario?`)) return;
 
@@ -101,7 +112,6 @@ export default function FleetDashboardPage() {
     }
   };
 
-  // Crear unidad
   const handleAddBike = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBikeForm.category_id || !newBikeForm.internal_code.trim()) return;
@@ -124,7 +134,6 @@ export default function FleetDashboardPage() {
     }
   };
 
-  // Filtrar bicis por búsqueda y estado
   const filteredBikes = bikes.filter((b) => {
     const matchesSearch = b.internal_code.toLowerCase().includes(searchTerm.toLowerCase()) ||
       b.catalog_categories?.name.toLowerCase().includes(searchTerm.toLowerCase());
@@ -136,7 +145,6 @@ export default function FleetDashboardPage() {
     return matchesSearch && b.status === filterStatus;
   });
 
-  // Agrupar por categoría/modelo
   const groupedByModel = useMemo(() => {
     const groups: Record<string, { modelName: string; details: string; items: PhysicalBike[] }> = {};
     
@@ -158,38 +166,36 @@ export default function FleetDashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Cabecera */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-extrabold text-white">Estado de Flota</h1>
-          <p className="text-sm text-slate-400">Control visual de disponibilidad y mantenimiento de unidades</p>
+          <h1 className="text-2xl font-black uppercase tracking-wider text-slate-900 dark:text-white">Estado de Flota</h1>
+          <p className="text-sm text-orange-600 dark:text-orange-500 font-semibold tracking-wide">Control visual de disponibilidad y mantenimiento de unidades</p>
         </div>
         <div className="flex items-center gap-3">
           <button
             onClick={fetchData}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 hover:bg-slate-800 text-sm font-semibold transition"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 hover:border-orange-500/50 hover:bg-slate-50 dark:hover:bg-zinc-800 text-slate-800 dark:text-white text-sm font-bold transition shadow-md"
           >
-            <RefreshCw className="w-4 h-4" /> Actualizar
+            <RefreshCw className="w-4 h-4 text-orange-600 dark:text-orange-500" /> Actualizar
           </button>
           <button
             onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-sm font-bold transition shadow-lg shadow-sky-950"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-500 hover:to-red-500 text-white text-sm font-extrabold uppercase tracking-wider transition shadow-lg shadow-orange-600/30 dark:shadow-orange-950/60"
           >
             <Plus className="w-4 h-4" /> Nueva Unidad
           </button>
         </div>
       </div>
 
-      {/* Barra de Búsqueda y Filtros Rápidos */}
-      <div className="flex flex-wrap items-center justify-between gap-4 bg-slate-900 p-3 rounded-2xl border border-slate-800">
+      <div className="flex flex-wrap items-center justify-between gap-4 bg-white dark:bg-zinc-900 p-3 rounded-2xl border border-slate-200 dark:border-zinc-800 shadow-lg transition-colors">
         <div className="relative flex-1 min-w-[240px]">
-          <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5" />
+          <Search className="w-4 h-4 text-orange-600 dark:text-orange-500 absolute left-3.5 top-3.5" />
           <input
             type="text"
             placeholder="Buscar por código (ej. MOU-1) o modelo..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:border-sky-500 outline-none"
+            className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 text-xs text-slate-900 dark:text-white focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
           />
         </div>
 
@@ -203,10 +209,10 @@ export default function FleetDashboardPage() {
             <button
               key={tab.id}
               onClick={() => setFilterStatus(tab.id)}
-              className={`px-3 py-2 rounded-xl text-xs font-bold transition ${
+              className={`px-3 py-2 rounded-xl text-xs font-extrabold uppercase tracking-wider transition ${
                 filterStatus === tab.id
-                  ? 'bg-sky-600 text-white shadow'
-                  : 'text-slate-400 hover:text-white bg-slate-950 border border-slate-800'
+                  ? 'bg-orange-600 text-white shadow-md shadow-orange-600/30 dark:shadow-orange-950/50'
+                  : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white bg-slate-50 dark:bg-zinc-950 border border-slate-200 dark:border-zinc-800'
               }`}
             >
               {tab.label}
@@ -216,39 +222,43 @@ export default function FleetDashboardPage() {
       </div>
 
       {loading ? (
-        <p className="text-slate-400 py-12 text-center">Cargando flota...</p>
+        <p className="text-slate-500 dark:text-zinc-400 py-12 text-center font-medium">Cargando flota...</p>
       ) : Object.keys(groupedByModel).length === 0 ? (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center text-slate-400">
+        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-12 text-center text-slate-500 dark:text-zinc-400 shadow-md">
           No se encontraron unidades con los filtros seleccionados.
         </div>
       ) : (
         <div className="space-y-4">
           {Object.entries(groupedByModel).map(([catId, group]) => (
-            <div key={catId} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+            <div key={catId} className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-5 space-y-4 shadow-xl relative overflow-hidden transition-colors">
+              <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-zinc-900 dark:from-white via-orange-500 to-red-600" />
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 dark:border-zinc-800 pb-3">
                 <div>
-                  <h3 className="text-lg font-bold text-white">{group.modelName}</h3>
-                  <p className="text-xs text-sky-400 font-medium">{group.details}</p>
+                  <h3 className="text-lg font-extrabold text-slate-900 dark:text-white tracking-tight">{group.modelName}</h3>
+                  <p className="text-xs text-orange-600 dark:text-orange-500 font-bold uppercase tracking-wider">{group.details}</p>
                 </div>
-                <span className="text-xs font-bold bg-slate-950 px-3 py-1 rounded-full border border-slate-800 text-slate-300">
-                  Total unidades: {group.items.length}
+                <span className="text-xs font-extrabold bg-slate-50 dark:bg-zinc-950 px-3 py-1 rounded-full border border-slate-200 dark:border-zinc-800 text-slate-700 dark:text-zinc-300">
+                  Total unidades: <strong className="text-orange-600 dark:text-orange-400">{group.items.length}</strong>
                 </span>
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
                 {group.items.map((bike) => {
-                  let badgeStyle = 'bg-emerald-950/70 border-emerald-800 text-emerald-300';
+                  let badgeStyle = 'bg-slate-50 dark:bg-zinc-950 border-slate-200 dark:border-zinc-700 text-slate-900 dark:text-white hover:border-orange-500';
                   let statusLabel = 'Disponible';
                   let StatusIcon = CheckCircle;
+                  let iconColor = 'text-emerald-600 dark:text-white';
 
                   if (bike.status === 'rented' || bike.status === 'reserved') {
-                    badgeStyle = 'bg-sky-950/70 border-sky-800 text-sky-300';
+                    badgeStyle = 'bg-orange-50 dark:bg-orange-950/50 border-orange-300 dark:border-orange-600/60 text-orange-900 dark:text-orange-300';
                     statusLabel = 'En alquiler';
                     StatusIcon = Bike;
+                    iconColor = 'text-orange-600 dark:text-orange-500';
                   } else if (bike.status === 'maintenance') {
-                    badgeStyle = 'bg-rose-950/70 border-rose-800 text-rose-300';
+                    badgeStyle = 'bg-red-50 dark:bg-red-950/60 border-red-300 dark:border-red-700/70 text-red-900 dark:text-red-300';
                     statusLabel = 'Mantenimiento';
                     StatusIcon = Wrench;
+                    iconColor = 'text-red-600 dark:text-red-500';
                   }
 
                   const isInUse = bike.status === 'rented' || bike.status === 'reserved';
@@ -259,17 +269,17 @@ export default function FleetDashboardPage() {
                       className={`p-3 rounded-2xl border flex flex-col justify-between space-y-2 transition shadow-sm ${badgeStyle}`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-extrabold text-sm tracking-wide text-white">
+                        <span className="font-black text-sm tracking-wide">
                           {bike.internal_code}
                         </span>
-                        <StatusIcon className="w-4 h-4 shrink-0" />
+                        <StatusIcon className={`w-4 h-4 shrink-0 ${iconColor}`} />
                       </div>
 
-                      <div className="text-[11px] font-semibold text-slate-200">
+                      <div className="text-[11px] font-bold uppercase tracking-wider opacity-90">
                         {statusLabel}
                       </div>
 
-                      <div className="flex items-center justify-between pt-1 border-t border-white/10 text-[11px]">
+                      <div className="flex items-center justify-between pt-1.5 border-t border-slate-200/60 dark:border-white/10 text-[11px]">
                         {!isInUse ? (
                           <button
                             onClick={() =>
@@ -278,17 +288,17 @@ export default function FleetDashboardPage() {
                                 bike.status === 'maintenance' ? 'available' : 'maintenance'
                               )
                             }
-                            className="font-semibold underline hover:text-white"
+                            className="font-bold text-orange-600 dark:text-orange-400 hover:underline transition"
                           >
-                            {bike.status === 'maintenance' ? 'Marcar disponible' : 'Enviar a mantenimiento'}
+                            {bike.status === 'maintenance' ? 'Marcar disponible' : 'Enviar a mant.'}
                           </button>
                         ) : (
-                          <span className="italic text-slate-400">Ocupada</span>
+                          <span className="italic text-slate-500 dark:text-zinc-400 font-medium">Ocupada</span>
                         )}
 
                         <button
                           onClick={() => handleDeleteBike(bike.id, bike.internal_code)}
-                          className="text-slate-400 hover:text-rose-300 p-0.5"
+                          className="text-slate-400 hover:text-red-600 dark:hover:text-red-400 p-0.5 transition"
                           title="Eliminar unidad"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -303,21 +313,21 @@ export default function FleetDashboardPage() {
         </div>
       )}
 
-      {/* Modal: Nueva Unidad */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <form
             onSubmit={handleAddBike}
-            className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-md space-y-5 shadow-2xl"
+            className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-6 w-full max-w-md space-y-5 shadow-2xl relative overflow-hidden transition-colors"
           >
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                <Bike className="w-5 h-5 text-sky-400" /> Nueva Unidad Física
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-zinc-900 dark:from-white via-orange-500 to-red-600" />
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-zinc-800 pb-3">
+              <h3 className="text-lg font-extrabold uppercase tracking-wider text-slate-900 dark:text-white flex items-center gap-2">
+                <Bike className="w-5 h-5 text-orange-600 dark:text-orange-500" /> Nueva Unidad Física
               </h3>
               <button
                 type="button"
                 onClick={() => setShowAddModal(false)}
-                className="text-slate-400 hover:text-white"
+                className="text-slate-400 hover:text-slate-900 dark:hover:text-white transition"
               >
                 ✕
               </button>
@@ -325,14 +335,14 @@ export default function FleetDashboardPage() {
 
             <div className="space-y-4">
               <div>
-                <label className="block text-xs text-slate-400 mb-1 font-semibold">
+                <label className="block text-xs text-slate-700 dark:text-zinc-300 mb-1 font-semibold">
                   Modelo del Catálogo
                 </label>
                 <select
                   required
                   value={newBikeForm.category_id}
                   onChange={(e) => setNewBikeForm({ ...newBikeForm, category_id: e.target.value })}
-                  className="w-full p-3 rounded-xl bg-slate-950 border border-slate-700 text-sm font-semibold text-white focus:border-sky-500 outline-none"
+                  className="w-full p-3 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-sm font-semibold text-slate-900 dark:text-white focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
                 >
                   {categories.map((cat) => (
                     <option key={cat.id} value={cat.id}>
@@ -343,7 +353,7 @@ export default function FleetDashboardPage() {
               </div>
 
               <div>
-                <label className="block text-xs text-slate-400 mb-1 font-semibold">
+                <label className="block text-xs text-slate-700 dark:text-zinc-300 mb-1 font-semibold">
                   Código Único Interno
                 </label>
                 <input
@@ -352,23 +362,23 @@ export default function FleetDashboardPage() {
                   placeholder="Ej. MOU-R29-M-3"
                   value={newBikeForm.internal_code}
                   onChange={(e) => setNewBikeForm({ ...newBikeForm, internal_code: e.target.value })}
-                  className="w-full p-3 rounded-xl bg-slate-950 border border-slate-700 text-sm font-bold text-white focus:border-sky-500 outline-none"
+                  className="w-full p-3 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-sm font-bold text-slate-900 dark:text-white focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
                 />
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 dark:border-zinc-800">
               <button
                 type="button"
                 onClick={() => setShowAddModal(false)}
-                className="px-4 py-2.5 rounded-xl bg-slate-800 text-xs font-semibold"
+                className="px-4 py-2.5 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-slate-200 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-200 text-xs font-bold transition"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
                 disabled={submitting}
-                className="px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition"
+                className="px-5 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-extrabold uppercase tracking-wider transition shadow-md shadow-orange-600/30 dark:shadow-orange-950/50"
               >
                 {submitting ? 'Guardando...' : 'Crear Unidad'}
               </button>
