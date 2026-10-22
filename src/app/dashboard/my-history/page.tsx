@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
-import { History, RefreshCw, Search, Phone, User, FileText, CheckCircle, XCircle, Calendar, DollarSign } from 'lucide-react';
+import { History, RefreshCw, Search, Phone, User, FileText, CheckCircle, XCircle, Calendar, X } from 'lucide-react';
 
 interface RentalItem {
   id: string;
@@ -38,6 +38,7 @@ export default function MyHistoryDashboardPage() {
   const [historyRentals, setHistoryRentals] = useState<Rental[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedHistoryMonth, setSelectedHistoryMonth] = useState<string>('');
 
   const fetchHistory = async () => {
     setLoading(true);
@@ -91,14 +92,30 @@ export default function MyHistoryDashboardPage() {
     }
   };
 
-  const filteredHistory = historyRentals.filter((r) => {
-    const term = searchTerm.toLowerCase();
-    return (
-      r.customer_name.toLowerCase().includes(term) ||
-      r.customer_dni.toLowerCase().includes(term) ||
-      r.customer_phone.toLowerCase().includes(term)
-    );
-  });
+  const monthlyHistoryKeys = useMemo(() => {
+    const monthsSet = new Set<string>();
+    historyRentals.forEach((r) => {
+      if (r.created_at) {
+        monthsSet.add(r.created_at.substring(0, 7));
+      }
+    });
+    return Array.from(monthsSet).sort((a, b) => b.localeCompare(a));
+  }, [historyRentals]);
+
+  const filteredHistory = useMemo(() => {
+    return historyRentals.filter((r) => {
+      const monthKey = r.created_at ? r.created_at.substring(0, 7) : '';
+      const matchesMonth = selectedHistoryMonth ? monthKey === selectedHistoryMonth : true;
+
+      const term = searchTerm.toLowerCase();
+      const matchesSearch =
+        r.customer_name.toLowerCase().includes(term) ||
+        r.customer_dni.toLowerCase().includes(term) ||
+        r.customer_phone.toLowerCase().includes(term);
+
+      return matchesMonth && matchesSearch;
+    });
+  }, [historyRentals, selectedHistoryMonth, searchTerm]);
 
   const paymentLabels: Record<string, string> = {
     cash: 'Efectivo',
@@ -110,7 +127,7 @@ export default function MyHistoryDashboardPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black uppercase tracking-wider text-slate-900 dark:text-white">My History</h1>
+          <h1 className="text-2xl font-black uppercase tracking-wider text-slate-900 dark:text-white">HISTORIAL DE ALQUILERES</h1>
           <p className="text-sm text-orange-600 dark:text-orange-500 font-semibold tracking-wide">Registro de devoluciones finalizadas y cancelaciones</p>
         </div>
         <button
@@ -121,8 +138,45 @@ export default function MyHistoryDashboardPage() {
         </button>
       </div>
 
-      <div className="bg-white dark:bg-zinc-900 p-3 rounded-2xl border border-slate-200 dark:border-zinc-800 max-w-md shadow-lg transition-colors">
-        <div className="relative">
+      <div className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-slate-200 dark:border-zinc-800 shadow-xl flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 transition-colors">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <History className="w-4 h-4 text-orange-600 dark:text-orange-500" />
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-zinc-300">Filtrar por Mes:</span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {selectedHistoryMonth && (
+              <button
+                onClick={() => setSelectedHistoryMonth('')}
+                className="flex items-center gap-1.5 px-3 py-2.5 bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 hover:bg-red-100 text-red-600 dark:text-red-400 text-xs font-extrabold rounded-xl transition"
+                title="Quitar filtro de mes"
+              >
+                <X className="w-4 h-4" /> Eliminar filtro
+              </button>
+            )}
+
+            <select
+              value={selectedHistoryMonth}
+              onChange={(e) => setSelectedHistoryMonth(e.target.value)}
+              className="p-2.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-xs font-bold text-slate-900 dark:text-white outline-none transition"
+            >
+              <option value="">-- Todos los meses (General) --</option>
+              {monthlyHistoryKeys.map((mKey) => {
+                const [y, m] = mKey.split('-');
+                const dObj = new Date(parseInt(y), parseInt(m) - 1, 1);
+                const mName = dObj.toLocaleString('es-AR', { month: 'long', year: 'numeric' });
+                return (
+                  <option key={mKey} value={mKey}>
+                    {mName.charAt(0).toUpperCase() + mName.slice(1)}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+        </div>
+
+        <div className="relative min-w-[260px]">
           <Search className="w-4 h-4 text-orange-600 dark:text-orange-500 absolute left-3.5 top-3.5" />
           <input
             type="text"
@@ -134,11 +188,17 @@ export default function MyHistoryDashboardPage() {
         </div>
       </div>
 
+      <div className="flex items-center justify-between px-2">
+        <span className="text-xs font-extrabold uppercase tracking-wider text-slate-500 dark:text-zinc-400">
+          Registros encontrados: <strong className="text-slate-900 dark:text-white">{filteredHistory.length}</strong>
+        </span>
+      </div>
+
       {loading ? (
         <p className="text-slate-500 dark:text-zinc-400 py-12 text-center font-medium">Cargando historial...</p>
       ) : filteredHistory.length === 0 ? (
         <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-12 text-center text-slate-500 dark:text-zinc-400 shadow-md">
-          No hay registros en el historial.
+          No hay registros en el historial para este mes o búsqueda.
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

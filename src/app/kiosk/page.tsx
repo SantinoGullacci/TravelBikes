@@ -13,9 +13,9 @@ interface StockVariant {
   frame_size: string | null;
   description: string | null;
   price_2h_cash: number;
-  price_2h_card: number;
-  price_day_cash: number;
-  price_day_card: number;
+  price_2h_transfer: number;
+  price_1day_cash: number;
+  price_1day_transfer: number;
   available_count: number;
 }
 
@@ -53,6 +53,10 @@ export default function KioskCheckInPage() {
       setDarkMode(true);
       document.documentElement.classList.add('dark');
     }
+  }, []);
+
+  useEffect(() => {
+    document.title = 'Travel Bikes';
   }, []);
 
   const toggleTheme = () => {
@@ -118,7 +122,6 @@ export default function KioskCheckInPage() {
     });
   };
 
-  // Función para vaciar por completo un ítem del carrito con el icono de basura
   const removeItemCompletely = (categoryId: string) => {
     setSelectedQuantities((prev) => {
       const updated = { ...prev };
@@ -132,12 +135,12 @@ export default function KioskCheckInPage() {
       .filter((v) => (selectedQuantities[v.category_id] || 0) > 0)
       .map((v) => {
         let unitPrice = 0;
-        const isCard = formData.payment_method !== 'cash';
+        const isTransferOrCard = formData.payment_method !== 'cash';
 
         if (formData.rental_type === '2h') {
-          unitPrice = isCard ? Number(v.price_2h_card) : Number(v.price_2h_cash);
+          unitPrice = isTransferOrCard ? Number(v.price_2h_transfer) : Number(v.price_2h_cash);
         } else {
-          unitPrice = isCard ? Number(v.price_day_card) : Number(v.price_day_cash);
+          unitPrice = isTransferOrCard ? Number(v.price_1day_transfer) : Number(v.price_1day_cash);
         }
 
         const multiplier = formData.rental_type === 'day' ? formData.days_count : 1;
@@ -238,6 +241,31 @@ export default function KioskCheckInPage() {
     fetchAvailableStock();
   };
 
+  const hoursOptions = useMemo(() => {
+    const options: string[] = [];
+    const now = new Date();
+    const isToday = formData.start_date === todayStr;
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+
+    for (let h = 8; h <= 21; h++) {
+      for (let m = 0; m < 60; m += 15) {
+        if (h === 21 && m > 0) break;
+
+        if (isToday) {
+          if (h < currentHour || (h === currentHour && m <= currentMinute)) {
+            continue;
+          }
+        }
+
+        const hourStr = h < 10 ? `0${h}` : `${h}`;
+        const minStr = m === 0 ? '00' : `${m}`;
+        options.push(`${hourStr}:${minStr}`);
+      }
+    }
+    return options;
+  }, [formData.start_date, todayStr]);
+
   if (submitted) {
     const isReservation = formData.start_date > todayStr;
     return (
@@ -267,16 +295,6 @@ export default function KioskCheckInPage() {
         </button>
       </div>
     );
-  }
-
-  const hoursOptions = [];
-  for (let h = 8; h <= 21; h++) {
-    for (let m = 0; m < 60; m += 15) {
-      if (h === 21 && m > 0) break;
-      const hourStr = h < 10 ? `0${h}` : `${h}`;
-      const minStr = m === 0 ? '00' : `${m}`;
-      hoursOptions.push(`${hourStr}:${minStr}`);
-    }
   }
 
   return (
@@ -314,8 +332,7 @@ export default function KioskCheckInPage() {
           </div>
         </div>
 
-        {/* Franja tricolor dinámica según el modo claro u oscuro */}
-        <div className="mt-5 w-full h-2 bg-gradient-to-r from-zinc-900 dark:from-white via-orange-500 to-red-600 rounded-full shadow-md" />
+        <div className="mt-5 w-full h-2 bg-gradient-to-r from-zinc-900 dark:from-white via-orange-500 to-red-600 shadow-md" />
       </header>
 
       <form onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -361,7 +378,24 @@ export default function KioskCheckInPage() {
                   required
                   min={todayStr}
                   value={formData.start_date}
-                  onChange={(e) => setFormData({ ...formData, start_date: e.target.value })}
+                  onChange={(e) => {
+                    const newDate = e.target.value;
+                    setFormData((prev) => {
+                      const isNowToday = newDate === todayStr;
+                      const nowH = new Date().getHours();
+                      const nowM = new Date().getMinutes();
+                      let newTime = prev.start_time;
+
+                      if (isNowToday) {
+                        const [hStr, mStr] = prev.start_time.split(':');
+                        if (parseInt(hStr) < nowH || (parseInt(hStr) === nowH && parseInt(mStr) <= nowM)) {
+                          newTime = '09:00';
+                        }
+                      }
+
+                      return { ...prev, start_date: newDate, start_time: newTime };
+                    });
+                  }}
                   className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-white font-bold text-sm focus:border-orange-600 dark:focus:border-orange-500 outline-none transition dark:[color-scheme:dark]"
                 />
               </div>
@@ -376,11 +410,15 @@ export default function KioskCheckInPage() {
                     onChange={(e) => setFormData({ ...formData, start_time: e.target.value })}
                     className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-white font-bold text-sm focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
                   >
-                    {hoursOptions.map((time) => (
-                      <option key={time} value={time}>
-                        {time} hs
-                      </option>
-                    ))}
+                    {hoursOptions.length === 0 ? (
+                      <option value="" disabled>No hay horarios disponibles hoy</option>
+                    ) : (
+                      hoursOptions.map((time) => (
+                        <option key={time} value={time}>
+                          {time} hs
+                        </option>
+                      ))
+                    )}
                   </select>
                 </div>
               ) : (
@@ -483,12 +521,12 @@ export default function KioskCheckInPage() {
                       const qty = selectedQuantities[variant.category_id] || 0;
                       const outOfStock = variant.available_count === 0;
 
-                      const isCard = formData.payment_method !== 'cash';
+                      const isTransferOrCard = formData.payment_method !== 'cash';
                       let displayPrice = 0;
                       if (formData.rental_type === '2h') {
-                        displayPrice = isCard ? variant.price_2h_card : variant.price_2h_cash;
+                        displayPrice = isTransferOrCard ? Number(variant.price_2h_transfer) : Number(variant.price_2h_cash);
                       } else {
-                        displayPrice = isCard ? variant.price_day_card : variant.price_day_cash;
+                        displayPrice = isTransferOrCard ? Number(variant.price_1day_transfer) : Number(variant.price_1day_cash);
                       }
 
                       return (
@@ -599,7 +637,6 @@ export default function KioskCheckInPage() {
                       <span className="font-black text-slate-900 dark:text-white">
                         ${item.subtotal.toLocaleString('es-AR')}
                       </span>
-                      {/* Botón de papelera / basura para quitar el ítem */}
                       <button
                         type="button"
                         onClick={() => removeItemCompletely(item.category_id)}
