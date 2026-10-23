@@ -22,6 +22,7 @@ import {
   FileText,
   Edit3,
   DollarSign,
+  MapPin,
 } from 'lucide-react';
 
 export default function RentalsDashboardPage() {
@@ -31,6 +32,9 @@ export default function RentalsDashboardPage() {
   const [filterTab, setFilterTab] = useState<'pending' | 'active' | 'reserved'>('pending');
   const [loading, setLoading] = useState(true);
   const [processingId, setProcessingId] = useState<string | null>(null);
+
+  // Estado local para rastrear en tiempo real las unidades asignadas por ítem en la interfaz
+  const [itemBikes, setItemBikes] = useState<Record<string, string>>({});
 
   const [reserveRental, setReserveRental] = useState<any | null>(null);
   const [returnRental, setReturnRental] = useState<any | null>(null);
@@ -42,6 +46,18 @@ export default function RentalsDashboardPage() {
     setRentals(data.rentals);
     setAllBikes(data.allBikes);
     setCategories(data.categories);
+
+    // Inicializar el mapeo local con las unidades que ya vienen de la base de datos
+    const initialMap: Record<string, string> = {};
+    data.rentals.forEach((r: any) => {
+      r.rental_items.forEach((item: any) => {
+        if (item.bike_id) {
+          initialMap[item.id] = item.bike_id;
+        }
+      });
+    });
+    setItemBikes(initialMap);
+
     setLoading(false);
   };
 
@@ -66,7 +82,22 @@ export default function RentalsDashboardPage() {
     };
   }, []);
 
-  const handleAssignBike = async (itemId: string, bikeId: string) => {
+  const handleAssignBike = async (itemId: string, bikeId: string, rental: any) => {
+    // Validar si esta unidad ya está seleccionada en otro ítem de esta misma tarjeta
+    const isDuplicate = rental.rental_items.some((otherItem: any) => {
+      if (otherItem.id === itemId) return false;
+      const currentSelectedBike = itemBikes[otherItem.id] || otherItem.bike_id;
+      return currentSelectedBike === bikeId;
+    });
+
+    if (bikeId && isDuplicate) {
+      alert('Esta unidad física ya está asignada a otro ítem en este mismo pedido. Elegí una unidad diferente.');
+      return;
+    }
+
+    // Actualizar estado local inmediatamente para refrescar los selects
+    setItemBikes((prev) => ({ ...prev, [itemId]: bikeId }));
+
     await updateRentalItemBike(itemId, bikeId || null);
     loadData();
   };
@@ -81,6 +112,14 @@ export default function RentalsDashboardPage() {
       const missingBike = rental.rental_items.some((item: any) => !item.bike_id);
       if (missingBike) {
         alert('Asigná una unidad física a cada ítem antes de activar el alquiler.');
+        return;
+      }
+
+      // Validación estricta: verificar que no haya unidades físicas duplicadas en el mismo alquiler
+      const assignedBikeIds = rental.rental_items.map((item: any) => item.bike_id);
+      const uniqueBikeIds = new Set(assignedBikeIds);
+      if (assignedBikeIds.length !== uniqueBikeIds.size) {
+        alert('Error: Hay unidades físicas repetidas en este pedido. Cada ítem debe tener una unidad única y diferente.');
         return;
       }
     }
@@ -188,6 +227,11 @@ export default function RentalsDashboardPage() {
                     <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">
                       DNI: <strong className="text-slate-900 dark:text-white">{rental.customer_dni}</strong> • <Phone className="w-3 h-3 inline text-orange-600 dark:text-orange-500" /> {rental.customer_phone}
                     </p>
+                    {rental.customer_address && (
+                      <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                        <MapPin className="w-3 h-3 inline text-orange-600 dark:text-orange-500" /> Alojamiento/Dir: <strong className="text-slate-900 dark:text-white">{rental.customer_address}</strong>
+                      </p>
+                    )}
                     {rental.status === 'reserved' && (
                       <p className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-orange-50 dark:bg-orange-500/10 border border-orange-200 dark:border-orange-500/30 text-orange-700 dark:text-orange-400 text-xs font-bold">
                         <Calendar className="w-3.5 h-3.5" /> Retiro: {rental.start_date}
@@ -212,7 +256,17 @@ export default function RentalsDashboardPage() {
                 <div className="space-y-2.5">
                   <p className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-zinc-400">Ítems:</p>
                   {rental.rental_items.map((item: any) => {
-                    const matchingBikes = availableBikesOnly.filter((b) => b.category_id === item.category_id);
+                    // Recopilar IDs de unidades ya seleccionadas en otros ítems de esta misma tarjeta usando el estado local
+                    const assignedBikeIdsInThisRental = rental.rental_items
+                      .filter((otherItem: any) => otherItem.id !== item.id)
+                      .map((otherItem: any) => itemBikes[otherItem.id] !== undefined ? itemBikes[otherItem.id] : otherItem.bike_id);
+
+                    const matchingBikes = availableBikesOnly.filter(
+                      (b) => b.category_id === item.category_id && !assignedBikeIdsInThisRental.includes(b.id)
+                    );
+
+                    const currentSelectedBikeId = itemBikes[item.id] !== undefined ? itemBikes[item.id] : (item.bike_id || '');
+
                     return (
                       <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 dark:bg-zinc-950 p-3 rounded-xl border border-slate-200 dark:border-zinc-800">
                         <div className="text-sm">
@@ -227,13 +281,13 @@ export default function RentalsDashboardPage() {
                           </span>
                         ) : (
                           <select
-                            value={item.bike_id || ''}
-                            onChange={(e) => handleAssignBike(item.id, e.target.value)}
+                            value={currentSelectedBikeId}
+                            onChange={(e) => handleAssignBike(item.id, e.target.value, rental)}
                             className="bg-white dark:bg-zinc-900 border border-slate-300 dark:border-zinc-700 rounded-lg px-3 py-1.5 text-xs font-semibold text-slate-900 dark:text-white focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
                           >
                             <option value="">-- Asignar unidad --</option>
-                            {item.bike_id && item.bikes_inventory && (
-                              <option value={item.bike_id}>{item.bikes_inventory.internal_code} (Sel.)</option>
+                            {currentSelectedBikeId && item.bikes_inventory && currentSelectedBikeId === item.bike_id && (
+                              <option value={currentSelectedBikeId}>{item.bikes_inventory.internal_code} (Sel.)</option>
                             )}
                             {matchingBikes.map((b: any) => (
                               <option key={b.id} value={b.id}>{b.internal_code}</option>

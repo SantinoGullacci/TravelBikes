@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
-import { History, RefreshCw, Search, Phone, User, FileText, CheckCircle, XCircle, Calendar, X } from 'lucide-react';
+import { History, RefreshCw, Search, Phone, User, FileText, CheckCircle, XCircle, Calendar, X, MapPin } from 'lucide-react';
 
 interface RentalItem {
   id: string;
@@ -21,6 +21,7 @@ interface Rental {
   customer_name: string;
   customer_dni: string;
   customer_phone: string;
+  customer_address: string | null;
   people_count: number;
   days_count: number;
   start_date: string;
@@ -233,6 +234,11 @@ export default function MyHistoryDashboardPage() {
                         DNI: <strong className="text-slate-900 dark:text-white">{rental.customer_dni}</strong> •{' '}
                         <Phone className="w-3 h-3 inline text-orange-600 dark:text-orange-500" /> {rental.customer_phone}
                       </p>
+                      {rental.customer_address && (
+                        <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                          <MapPin className="w-3 h-3 inline text-orange-600 dark:text-orange-500" /> Dir/Alojamiento: <strong className="text-slate-900 dark:text-white">{rental.customer_address}</strong>
+                        </p>
+                      )}
                     </div>
 
                     <div className="text-right">

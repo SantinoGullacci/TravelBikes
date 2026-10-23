@@ -8,6 +8,7 @@ interface RentalTransaction {
   id: string;
   customer_name: string;
   customer_dni: string;
+  customer_address: string | null;
   payment_method: 'cash' | 'transfer' | 'bank';
   total_amount: number;
   created_at: string;
@@ -33,7 +34,7 @@ export default function CashRegisterPage() {
     setLoading(true);
     const { data: allData } = await supabase
       .from('rentals')
-      .select('id, customer_name, customer_dni, payment_method, total_amount, created_at, end_date, status')
+      .select('id, customer_name, customer_dni, customer_address, payment_method, total_amount, created_at, end_date, status') // <-- INCLUIDO customer_address
       .eq('is_paid', true)
       .order('created_at', { ascending: false });
 
@@ -364,7 +365,9 @@ export default function CashRegisterPage() {
                   <div>
                     <h4 className="font-extrabold text-slate-900 dark:text-white text-base">{rental.customer_name}</h4>
                     <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
-                      DNI: <strong className="text-slate-900 dark:text-white">{rental.customer_dni}</strong> • {dateFormatted}
+                      DNI: <strong className="text-slate-900 dark:text-white">{rental.customer_dni}</strong>
+                      {rental.customer_address && <> • Dir: <strong className="text-slate-900 dark:text-white">{rental.customer_address}</strong></>}
+                      {' • '}{dateFormatted}
                     </p>
                   </div>
 

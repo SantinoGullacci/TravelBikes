@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { Bike, Zap, Caravan, Plus, Minus, CheckCircle2, Users, Calendar, ShoppingBag, CreditCard, Banknote, ArrowRightLeft, Clock, Sun, Moon, Trash2, LayoutDashboard } from 'lucide-react';
+import { Bike, Zap, Caravan, Plus, Minus, CheckCircle2, Users, Calendar, ShoppingBag, CreditCard, Banknote, ArrowRightLeft, Clock, Sun, Moon, Trash2, LayoutDashboard, ShieldAlert } from 'lucide-react';
 
 interface StockVariant {
   category_id: string;
@@ -23,6 +23,8 @@ export default function KioskCheckInPage() {
   const router = useRouter();
   const [variants, setVariants] = useState<StockVariant[]>([]);
   const [loading, setLoading] = useState(true);
+  const [checkingAuth, setCheckingAuth] = useState(true);
+  const [isAuthorized, setIsAuthorized] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [darkMode, setDarkMode] = useState(true);
@@ -30,21 +32,53 @@ export default function KioskCheckInPage() {
   const [activeTab, setActiveTab] = useState<'bikes' | 'accessory'>('bikes');
   const [selectedQuantities, setSelectedQuantities] = useState<Record<string, number>>({});
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const [todayStr, setTodayStr] = useState('');
 
   const [formData, setFormData] = useState({
     customer_name: '',
     customer_dni: '',
     customer_phone: '',
+    customer_address: '',
     people_count: 1,
     rental_type: 'day' as '2h' | 'day',
     days_count: 1,
-    start_date: todayStr,
+    start_date: '',
     start_time: '09:00',
     payment_method: 'cash' as 'cash' | 'debit' | 'transfer',
   });
 
+  // 1. Validar sesión activa de empleado/admin al cargar la página
   useEffect(() => {
+    let isMounted = true;
+
+    const verifySession = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (isMounted) {
+          if (!session) {
+            setIsAuthorized(false);
+          } else {
+            setIsAuthorized(true);
+          }
+          setCheckingAuth(false);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setIsAuthorized(false);
+          setCheckingAuth(false);
+        }
+      }
+    };
+
+    verifySession();
+
+    const currentDay = new Date().toISOString().split('T')[0];
+    setTodayStr(currentDay);
+    setFormData((prev) => ({
+      ...prev,
+      start_date: currentDay,
+    }));
+
     const storedTheme = localStorage.getItem('theme');
     if (storedTheme === 'light') {
       setDarkMode(false);
@@ -53,10 +87,11 @@ export default function KioskCheckInPage() {
       setDarkMode(true);
       document.documentElement.classList.add('dark');
     }
-  }, []);
+    document.title = 'Travel Bikes - Kiosco';
 
-  useEffect(() => {
-    document.title = 'Travel Bikes';
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const toggleTheme = () => {
@@ -73,18 +108,50 @@ export default function KioskCheckInPage() {
 
   const fetchAvailableStock = async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('available_stock_by_category')
-      .select('*')
-      .order('name', { ascending: true });
+    const [stockRes, catsRes, totalBikesRes] = await Promise.all([
+      supabase
+        .from('available_stock_by_category')
+        .select('*')
+        .order('name', { ascending: true }),
+      supabase
+        .from('catalog_categories')
+        .select('id, price_2h_cash, price_2h_transfer, price_1day_cash, price_1day_transfer')
+        .eq('active', true),
+      supabase
+        .from('bikes_inventory')
+        .select('category_id'),
+    ]);
 
-    if (!error && data) {
-      setVariants(data as StockVariant[]);
+    if (!stockRes.error && stockRes.data) {
+      const catsMap = new Map(
+        (catsRes.data || []).map((c) => [c.id, c])
+      );
+
+      const categoriesWithPhysicalUnits = new Set(
+        (totalBikesRes.data || []).map((b) => b.category_id)
+      );
+
+      const mergedVariants = stockRes.data
+        .filter((item: any) => catsMap.has(item.category_id) && categoriesWithPhysicalUnits.has(item.category_id))
+        .map((item: any) => {
+          const catPrices = catsMap.get(item.category_id)!;
+          return {
+            ...item,
+            price_2h_cash: Number(catPrices.price_2h_cash ?? item.price_2h_cash ?? 0),
+            price_2h_transfer: Number(catPrices.price_2h_transfer ?? item.price_2h_transfer ?? 0),
+            price_1day_cash: Number(catPrices.price_1day_cash ?? item.price_1day_cash ?? 0),
+            price_1day_transfer: Number(catPrices.price_1day_transfer ?? item.price_1day_transfer ?? 0),
+          };
+        });
+
+      setVariants(mergedVariants as StockVariant[]);
     }
     setLoading(false);
   };
 
   useEffect(() => {
+    if (!isAuthorized) return;
+
     fetchAvailableStock();
 
     const channel = supabase
@@ -100,7 +167,7 @@ export default function KioskCheckInPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [isAuthorized]);
 
   const groupedModels = useMemo(() => {
     const filtered = variants.filter((v) =>
@@ -183,6 +250,7 @@ export default function KioskCheckInPage() {
         customer_name: formData.customer_name,
         customer_dni: formData.customer_dni,
         customer_phone: formData.customer_phone,
+        customer_address: formData.customer_address,
         people_count: formData.people_count,
         days_count: formData.rental_type === '2h' ? 1 : formData.days_count,
         start_date: formData.start_date,
@@ -229,6 +297,7 @@ export default function KioskCheckInPage() {
       customer_name: '',
       customer_dni: '',
       customer_phone: '',
+      customer_address: '',
       people_count: 1,
       rental_type: 'day',
       days_count: 1,
@@ -265,6 +334,41 @@ export default function KioskCheckInPage() {
     }
     return options;
   }, [formData.start_date, todayStr]);
+
+  // --- CONTROLES DE RENDERIZADO CONDICIONAL (SIEMPRE AL FINAL, DESPUÉS DE LOS HOOKS) ---
+
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen bg-slate-100 dark:bg-zinc-950 text-slate-500 dark:text-zinc-400 flex items-center justify-center font-semibold tracking-wide">
+        Verificando seguridad del sistema...
+      </div>
+    );
+  }
+
+  if (!isAuthorized) {
+    return (
+      <div className="min-h-screen bg-slate-100 dark:bg-zinc-950 text-slate-900 dark:text-white flex flex-col items-center justify-center p-6 text-center transition-colors">
+        <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-2xl rounded-3xl p-8 max-w-md w-full space-y-6 relative overflow-hidden">
+          <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-orange-500 via-red-600 to-zinc-900" />
+          <div className="w-16 h-16 bg-red-100 dark:bg-red-950/60 text-red-600 dark:text-red-400 rounded-2xl flex items-center justify-center mx-auto">
+            <ShieldAlert className="w-8 h-8" />
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-2xl font-black uppercase tracking-wider">Acceso Restringido</h1>
+            <p className="text-sm text-slate-600 dark:text-zinc-400">
+              Para utilizar el Kiosco de Travel Bikes, es obligatorio iniciar sesión con una cuenta de personal autorizada en este navegador.
+            </p>
+          </div>
+          <button
+            onClick={() => router.push('/login')}
+            className="w-full py-3.5 bg-orange-600 hover:bg-orange-500 text-white rounded-xl font-extrabold uppercase tracking-wider text-sm transition shadow-lg shadow-orange-600/30"
+          >
+            Iniciar Sesión
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (submitted) {
     const isReservation = formData.start_date > todayStr;
@@ -376,7 +480,7 @@ export default function KioskCheckInPage() {
                 <input
                   type="date"
                   required
-                  min={todayStr}
+                  min={todayStr || undefined}
                   value={formData.start_date}
                   onChange={(e) => {
                     const newDate = e.target.value;
@@ -664,6 +768,18 @@ export default function KioskCheckInPage() {
                 placeholder="Ej. Juan Pérez"
                 value={formData.customer_name}
                 onChange={(e) => setFormData({ ...formData, customer_name: e.target.value })}
+                className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 text-slate-900 dark:text-white text-base focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs text-slate-700 dark:text-zinc-300 font-bold mb-1">Alojamiento / Dirección</label>
+              <input
+                type="text"
+                required
+                placeholder="Ej. Hotel Las Restingas / Calle 9 de Julio 123"
+                value={formData.customer_address}
+                onChange={(e) => setFormData({ ...formData, customer_address: e.target.value })}
                 className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 text-slate-900 dark:text-white text-base focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
               />
             </div>
