@@ -47,6 +47,12 @@ export default function KioskCheckInPage() {
     payment_method: 'cash' as 'cash' | 'debit' | 'transfer',
   });
 
+  const [now, setNow] = useState<Date | null>(null);
+
+  useEffect(() => {
+    setNow(new Date());
+  }, []);
+
   // 1. Validar sesión activa de empleado/admin al cargar la página
   useEffect(() => {
     let isMounted = true;
@@ -312,7 +318,8 @@ export default function KioskCheckInPage() {
 
   const hoursOptions = useMemo(() => {
     const options: string[] = [];
-    const now = new Date();
+    if (!now) return options;
+
     const isToday = formData.start_date === todayStr;
     const currentHour = now.getHours();
     const currentMinute = now.getMinutes();
@@ -333,7 +340,7 @@ export default function KioskCheckInPage() {
       }
     }
     return options;
-  }, [formData.start_date, todayStr]);
+  }, [formData.start_date, todayStr, now]);
 
   // --- CONTROLES DE RENDERIZADO CONDICIONAL (SIEMPRE AL FINAL, DESPUÉS DE LOS HOOKS) ---
 
