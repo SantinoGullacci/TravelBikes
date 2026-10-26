@@ -3,7 +3,30 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { Bike, Zap, Caravan, Plus, Minus, CheckCircle2, Users, Calendar, ShoppingBag, CreditCard, Banknote, ArrowRightLeft, Clock, Sun, Moon, Trash2, LayoutDashboard, ShieldAlert } from 'lucide-react';
+import {
+  Bike,
+  Zap,
+  Caravan,
+  Plus,
+  Minus,
+  CheckCircle2,
+  Users,
+  Calendar,
+  ShoppingBag,
+  CreditCard,
+  Banknote,
+  ArrowRightLeft,
+  Clock,
+  Sun,
+  Moon,
+  Trash2,
+  LayoutDashboard,
+  ShieldAlert,
+  ArrowUp,
+  ArrowDown,
+  SlidersHorizontal,
+  RotateCcw,
+} from 'lucide-react';
 
 interface StockVariant {
   category_id: string;
@@ -19,6 +42,31 @@ interface StockVariant {
   available_count: number;
 }
 
+const FRAME_ORDER: Record<string, number> = {
+  XS: 1,
+  S: 2,
+  M: 3,
+  L: 4,
+  XL: 5,
+  XXL: 6,
+  ÚNICO: 7,
+  UNICO: 7,
+};
+
+// Función que asigna prioridad por defecto: 1° R29, 2° R26, 3° Otras bicis, 4° E-Bikes, 5° Accesorios
+function getDefaultGroupPriority(modelName: string, variants: StockVariant[]): number {
+  const first = variants[0];
+  if (!first) return 99;
+  if (first.type === 'ebike') return 40;
+  if (first.type === 'accessory') return 50;
+
+  const combinedText = `${modelName} ${variants.map((v) => v.wheel_size || '').join(' ')}`.toUpperCase();
+  if (combinedText.includes('29')) return 10;
+  if (combinedText.includes('26')) return 20;
+  if (combinedText.includes('27.5') || combinedText.includes('24') || combinedText.includes('20')) return 25;
+  return 30;
+}
+
 export default function KioskCheckInPage() {
   const router = useRouter();
   const [variants, setVariants] = useState<StockVariant[]>([]);
@@ -31,6 +79,10 @@ export default function KioskCheckInPage() {
 
   const [activeTab, setActiveTab] = useState<'bikes' | 'accessory'>('bikes');
   const [selectedQuantities, setSelectedQuantities] = useState<Record<string, number>>({});
+
+  // Estados para la herramienta de ordenamiento de tarjetas
+  const [isReordering, setIsReordering] = useState(false);
+  const [customCardOrder, setCustomCardOrder] = useState<string[]>([]);
 
   const [todayStr, setTodayStr] = useState('');
 
@@ -53,13 +105,15 @@ export default function KioskCheckInPage() {
     setNow(new Date());
   }, []);
 
-  // 1. Validar sesión activa de empleado/admin al cargar la página
+  // 1. Validar sesión activa de empleado/admin y cargar preferencias al iniciar
   useEffect(() => {
     let isMounted = true;
 
     const verifySession = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
         if (isMounted) {
           if (!session) {
             setIsAuthorized(false);
@@ -93,6 +147,17 @@ export default function KioskCheckInPage() {
       setDarkMode(true);
       document.documentElement.classList.add('dark');
     }
+
+    // Cargar el orden personalizado de tarjetas guardado
+    const savedOrder = localStorage.getItem('travelbikes_kiosk_card_order');
+    if (savedOrder) {
+      try {
+        setCustomCardOrder(JSON.parse(savedOrder));
+      } catch (e) {
+        console.error('Error leyendo orden guardado:', e);
+      }
+    }
+
     document.title = 'Travel Bikes - Kiosco';
 
     return () => {
@@ -115,27 +180,18 @@ export default function KioskCheckInPage() {
   const fetchAvailableStock = async () => {
     setLoading(true);
     const [stockRes, catsRes, totalBikesRes] = await Promise.all([
-      supabase
-        .from('available_stock_by_category')
-        .select('*')
-        .order('name', { ascending: true }),
+      supabase.from('available_stock_by_category').select('*').order('name', { ascending: true }),
       supabase
         .from('catalog_categories')
         .select('id, price_2h_cash, price_2h_transfer, price_1day_cash, price_1day_transfer')
         .eq('active', true),
-      supabase
-        .from('bikes_inventory')
-        .select('category_id'),
+      supabase.from('bikes_inventory').select('category_id'),
     ]);
 
     if (!stockRes.error && stockRes.data) {
-      const catsMap = new Map(
-        (catsRes.data || []).map((c) => [c.id, c])
-      );
+      const catsMap = new Map((catsRes.data || []).map((c) => [c.id, c]));
 
-      const categoriesWithPhysicalUnits = new Set(
-        (totalBikesRes.data || []).map((b) => b.category_id)
-      );
+      const categoriesWithPhysicalUnits = new Set((totalBikesRes.data || []).map((b) => b.category_id));
 
       const mergedVariants = stockRes.data
         .filter((item: any) => catsMap.has(item.category_id) && categoriesWithPhysicalUnits.has(item.category_id))
@@ -175,17 +231,78 @@ export default function KioskCheckInPage() {
     };
   }, [isAuthorized]);
 
-  const groupedModels = useMemo(() => {
+  // Agrupa y ordena tanto las tarjetas como las variantes internas (R29 -> R26 -> Ebike y Talles S -> M -> L -> XL)
+  const orderedGroups = useMemo(() => {
     const filtered = variants.filter((v) =>
       activeTab === 'bikes' ? v.type === 'bike' || v.type === 'ebike' : v.type === 'accessory'
     );
-    const groups: Record<string, StockVariant[]> = {};
+
+    const groupsMap: Record<string, StockVariant[]> = {};
     filtered.forEach((v) => {
-      if (!groups[v.name]) groups[v.name] = [];
-      groups[v.name].push(v);
+      if (!groupsMap[v.name]) groupsMap[v.name] = [];
+      groupsMap[v.name].push(v);
     });
-    return groups;
-  }, [variants, activeTab]);
+
+    // Ordenar las filas internas dentro de cada tarjeta (por rodado descendente y por talle S->M->L->XL)
+    Object.keys(groupsMap).forEach((name) => {
+      groupsMap[name].sort((a, b) => {
+        const wA = parseFloat((a.wheel_size || '0').replace(/[^\d.]/g, '')) || 0;
+        const wB = parseFloat((b.wheel_size || '0').replace(/[^\d.]/g, '')) || 0;
+        if (wA !== wB) return wB - wA; // Ej. R29 antes que R26
+
+        const fA = FRAME_ORDER[(a.frame_size || '').toUpperCase().trim()] ?? 99;
+        const fB = FRAME_ORDER[(b.frame_size || '').toUpperCase().trim()] ?? 99;
+        if (fA !== fB) return fA - fB;
+
+        return (a.frame_size || '').localeCompare(b.frame_size || '');
+      });
+    });
+
+    const entries = Object.entries(groupsMap);
+
+    entries.sort(([nameA, varsA], [nameB, varsB]) => {
+      const idxA = customCardOrder.indexOf(nameA);
+      const idxB = customCardOrder.indexOf(nameB);
+
+      // Si ambos están en el orden personalizado del usuario, respetar su posición exacta
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      if (idxA !== -1) return -1;
+      if (idxB !== -1) return 1;
+
+      // Orden automático por defecto: R29 -> R26 -> Otras -> E-Bikes
+      const prioA = getDefaultGroupPriority(nameA, varsA);
+      const prioB = getDefaultGroupPriority(nameB, varsB);
+      if (prioA !== prioB) return prioA - prioB;
+
+      return nameA.localeCompare(nameB, 'es');
+    });
+
+    return entries;
+  }, [variants, activeTab, customCardOrder]);
+
+  // Función para subir o bajar una tarjeta y guardar el nuevo orden
+  const moveCard = (index: number, direction: 'up' | 'down') => {
+    const currentNames = orderedGroups.map(([name]) => name);
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= currentNames.length) return;
+
+    const swapped = [...currentNames];
+    const temp = swapped[index];
+    swapped[index] = swapped[targetIndex];
+    swapped[targetIndex] = temp;
+
+    // Conservar también el orden de la otra pestaña (accesorios o bicis)
+    const otherNames = customCardOrder.filter((name) => !currentNames.includes(name));
+    const updatedOrder = [...swapped, ...otherNames];
+
+    setCustomCardOrder(updatedOrder);
+    localStorage.setItem('travelbikes_kiosk_card_order', JSON.stringify(updatedOrder));
+  };
+
+  const resetCardOrder = () => {
+    setCustomCardOrder([]);
+    localStorage.removeItem('travelbikes_kiosk_card_order');
+  };
 
   const updateQuantity = (categoryId: string, delta: number, maxAvailable: number) => {
     setSelectedQuantities((prev) => {
@@ -248,7 +365,7 @@ export default function KioskCheckInPage() {
 
       const initialStatus = formData.start_date > todayStr ? 'reserved' : 'pending';
       const dbPaymentMethod = formData.payment_method === 'debit' ? 'bank' : formData.payment_method;
-      
+
       const timeNote = formData.rental_type === '2h' ? `[Horario: ${formData.start_time} hs - 2 horas]` : null;
 
       const { error: rentalError } = await supabase.from('rentals').insert({
@@ -342,8 +459,6 @@ export default function KioskCheckInPage() {
     return options;
   }, [formData.start_date, todayStr, now]);
 
-  // --- CONTROLES DE RENDERIZADO CONDICIONAL (SIEMPRE AL FINAL, DESPUÉS DE LOS HOOKS) ---
-
   if (checkingAuth) {
     return (
       <div className="min-h-screen bg-slate-100 dark:bg-zinc-950 text-slate-500 dark:text-zinc-400 flex items-center justify-center font-semibold tracking-wide">
@@ -414,18 +529,29 @@ export default function KioskCheckInPage() {
         <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 px-2">
           <div>
             <div className="flex items-center gap-2.5">
-              <img 
-                src="/logo.png" 
-                alt="Travel Bikes Logo" 
-                className="h-20 md:h-22 w-auto object-contain" 
-              />
+              <img src="/logo.png" alt="Travel Bikes Logo" className="h-20 md:h-22 w-auto object-contain" />
             </div>
             <p className="text-orange-600 dark:text-orange-500 font-extrabold tracking-widest uppercase text-xs mt-1">
               Puerto Madryn
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
             <button
+              type="button"
+              onClick={() => setIsReordering(!isReordering)}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs font-extrabold uppercase tracking-wider transition shadow-sm ${
+                isReordering
+                  ? 'bg-orange-600 border-orange-500 text-white shadow-orange-600/30'
+                  : 'bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-slate-800 dark:text-zinc-200 hover:border-orange-500'
+              }`}
+              title="Reorganizar el orden de las tarjetas de bicicletas"
+            >
+              <SlidersHorizontal className="w-4 h-4" />
+              {isReordering ? 'Listo (Guardar Orden)' : 'Organizar Tarjetas'}
+            </button>
+
+            <button
+              type="button"
               onClick={() => router.push('/dashboard/rentals')}
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-slate-800 dark:text-zinc-200 hover:border-orange-500 text-xs font-extrabold uppercase tracking-wider transition shadow-sm"
               title="Volver al panel de administración"
@@ -434,6 +560,7 @@ export default function KioskCheckInPage() {
             </button>
 
             <button
+              type="button"
               onClick={toggleTheme}
               className="p-2.5 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-slate-800 dark:text-zinc-200 hover:border-orange-500 transition shadow-sm flex items-center justify-center shrink-0"
               title="Cambiar tema claro / oscuro"
@@ -522,7 +649,9 @@ export default function KioskCheckInPage() {
                     className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-white font-bold text-sm focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
                   >
                     {hoursOptions.length === 0 ? (
-                      <option value="" disabled>No hay horarios disponibles hoy</option>
+                      <option value="" disabled>
+                        No hay horarios disponibles hoy
+                      </option>
                     ) : (
                       hoursOptions.map((time) => (
                         <option key={time} value={time}>
@@ -607,23 +736,88 @@ export default function KioskCheckInPage() {
             })}
           </div>
 
+          {/* Barra informativa cuando el Modo Organizar Tarjetas está activo */}
+          {isReordering && (
+            <div className="bg-orange-50 dark:bg-orange-950/40 border border-orange-300 dark:border-orange-500/40 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-sm">
+              <div className="space-y-0.5">
+                <p className="text-xs font-extrabold uppercase tracking-wider text-orange-700 dark:text-orange-400">
+                  Modo Organizar Tarjetas Activo
+                </p>
+                <p className="text-xs text-slate-600 dark:text-zinc-300">
+                  Usá las flechas ↑ y ↓ en cada tarjeta para acomodarlas a tu gusto. El orden queda guardado automáticamente.
+                </p>
+              </div>
+              {customCardOrder.length > 0 && (
+                <button
+                  type="button"
+                  onClick={resetCardOrder}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-orange-200 dark:border-zinc-700 hover:border-orange-500 text-xs font-bold text-slate-700 dark:text-zinc-300 transition"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-orange-600" />
+                  Orden por defecto (R29 → R26 → E-Bikes)
+                </button>
+              )}
+            </div>
+          )}
+
           {loading ? (
             <p className="text-slate-500 dark:text-zinc-400 py-8 text-center font-medium">Cargando catálogo...</p>
           ) : (
             <div className="space-y-4">
-              {Object.entries(groupedModels).map(([modelName, modelVariants]) => (
-                <div key={modelName} className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-5 space-y-4 shadow-xl transition-colors">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-xl font-extrabold text-slate-900 dark:text-white tracking-tight">{modelName}</h3>
-                      {modelVariants[0].type === 'ebike' && (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-400 border border-orange-200 dark:border-orange-500/30">
-                          <Zap className="w-3.5 h-3.5" /> Eléctrica
-                        </span>
+              {orderedGroups.map(([modelName, modelVariants], groupIdx) => (
+                <div
+                  key={modelName}
+                  className={`bg-white dark:bg-zinc-900 border rounded-2xl p-5 space-y-4 shadow-xl transition-all ${
+                    isReordering
+                      ? 'border-orange-500/70 ring-2 ring-orange-500/20'
+                      : 'border-slate-200 dark:border-zinc-800'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        {isReordering && (
+                          <span className="px-2 py-0.5 rounded-md bg-orange-600 text-white text-xs font-black">
+                            #{groupIdx + 1}
+                          </span>
+                        )}
+                        <h3 className="text-xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+                          {modelName}
+                        </h3>
+                        {modelVariants[0].type === 'ebike' && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-400 border border-orange-200 dark:border-orange-500/30">
+                            <Zap className="w-3.5 h-3.5" /> Eléctrica
+                          </span>
+                        )}
+                      </div>
+                      {modelVariants[0].description && (
+                        <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
+                          {modelVariants[0].description}
+                        </p>
                       )}
                     </div>
-                    {modelVariants[0].description && (
-                      <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">{modelVariants[0].description}</p>
+
+                    {isReordering && (
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          disabled={groupIdx === 0}
+                          onClick={() => moveCard(groupIdx, 'up')}
+                          className="p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-orange-600 hover:text-white text-slate-700 dark:text-zinc-200 disabled:opacity-25 transition"
+                          title="Subir tarjeta"
+                        >
+                          <ArrowUp className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={groupIdx === orderedGroups.length - 1}
+                          onClick={() => moveCard(groupIdx, 'down')}
+                          className="p-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-orange-600 hover:text-white text-slate-700 dark:text-zinc-200 disabled:opacity-25 transition"
+                          title="Bajar tarjeta"
+                        >
+                          <ArrowDown className="w-4 h-4" />
+                        </button>
+                      </div>
                     )}
                   </div>
 
