@@ -39,6 +39,7 @@ interface StockVariant {
   price_2h_transfer: number;
   price_1day_cash: number;
   price_1day_transfer: number;
+  total_physical_units: number;
   available_count: number;
 }
 
@@ -53,34 +54,61 @@ const FRAME_ORDER: Record<string, number> = {
   UNICO: 7,
 };
 
-// Función que asigna prioridad por defecto: 1° R29, 2° R26, 3° Otras bicis, 4° E-Bikes, 5° Accesorios
+// E-Bikes al principio (Prioridad 5), luego R29 (10), R26 (20), etc.
+// Orden por defecto estricto: 1° E-Bikes, 2° R29, 3° R26, 4° Otras, 5° Accesorios
+// Orden por defecto estricto: 1° R29, 2° R26, 3° E-Bikes, 4° Otras, 5° Accesorios
+// Orden por defecto estricto: 1° R29, 2° R26, 3° E-Bikes, 4° Tándem/Otras, 5° Accesorios
 function getDefaultGroupPriority(modelName: string, variants: StockVariant[]): number {
   const first = variants[0];
   if (!first) return 99;
-  if (first.type === 'ebike') return 40;
   if (first.type === 'accessory') return 50;
 
   const combinedText = `${modelName} ${variants.map((v) => v.wheel_size || '').join(' ')}`.toUpperCase();
-  if (combinedText.includes('29')) return 10;
-  if (combinedText.includes('26')) return 20;
-  if (combinedText.includes('27.5') || combinedText.includes('24') || combinedText.includes('20')) return 25;
-  return 30;
+  if (combinedText.includes('29')) return 10; // 1° R29
+  if (combinedText.includes('26') && !combinedText.includes('TÁNDEM') && !combinedText.includes('TANDEM')) return 20; // 2° R26 (excluyendo tándem)
+
+  // E-Bikes terceras estrictas (debajo de R26 que tiene 20, y antes del Tándem que tendrá 30)
+  const nameUpper = modelName.toUpperCase();
+  if (first.type === 'ebike' || nameUpper.includes('E-BIKE') || nameUpper.includes('ELECTRICA')) {
+    return 25; 
+  }
+
+  return 30; // 4° Tándem, Infantiles, etc.
 }
+
+// Calcula la fecha de fin inclusiva
+const calculateInclusiveEndDate = (startDateStr: string, rentalType: '2h' | 'day', daysCount: number) => {
+  if (!startDateStr) return '';
+  const startObj = new Date(startDateStr + 'T00:00:00');
+  const endObj = new Date(startObj);
+  if (rentalType === 'day' && daysCount > 1) {
+    endObj.setDate(startObj.getDate() + (daysCount - 1));
+  }
+  return endObj.toISOString().split('T')[0];
+};
+
+const getEffectiveRentalEndDate = (rental: any) => {
+  if (!rental.start_date) return '';
+  const is2Hours = Boolean(rental.notes?.includes('2 horas'));
+  const days = is2Hours ? 1 : Math.max(1, Number(rental.days_count || 1));
+  return calculateInclusiveEndDate(rental.start_date, is2Hours ? '2h' : 'day', days);
+};
 
 export default function KioskCheckInPage() {
   const router = useRouter();
-  const [variants, setVariants] = useState<StockVariant[]>([]);
+  const [baseCatalog, setBaseCatalog] = useState<Omit<StockVariant, 'available_count'>[]>([]);
+  const [activeCommitments, setActiveCommitments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [confirmedTotal, setConfirmedTotal] = useState(0);
   const [darkMode, setDarkMode] = useState(true);
 
   const [activeTab, setActiveTab] = useState<'bikes' | 'accessory'>('bikes');
   const [selectedQuantities, setSelectedQuantities] = useState<Record<string, number>>({});
 
-  // Estados para la herramienta de ordenamiento de tarjetas
   const [isReordering, setIsReordering] = useState(false);
   const [customCardOrder, setCustomCardOrder] = useState<string[]>([]);
 
@@ -105,7 +133,6 @@ export default function KioskCheckInPage() {
     setNow(new Date());
   }, []);
 
-  // 1. Validar sesión activa de empleado/admin y cargar preferencias al iniciar
   useEffect(() => {
     let isMounted = true;
 
@@ -115,14 +142,10 @@ export default function KioskCheckInPage() {
           data: { session },
         } = await supabase.auth.getSession();
         if (isMounted) {
-          if (!session) {
-            setIsAuthorized(false);
-          } else {
-            setIsAuthorized(true);
-          }
+          setIsAuthorized(Boolean(session));
           setCheckingAuth(false);
         }
-      } catch (err) {
+      } catch {
         if (isMounted) {
           setIsAuthorized(false);
           setCheckingAuth(false);
@@ -148,7 +171,6 @@ export default function KioskCheckInPage() {
       document.documentElement.classList.add('dark');
     }
 
-    // Cargar el orden personalizado de tarjetas guardado
     const savedOrder = localStorage.getItem('travelbikes_kiosk_card_order');
     if (savedOrder) {
       try {
@@ -179,22 +201,32 @@ export default function KioskCheckInPage() {
 
   const fetchAvailableStock = async () => {
     setLoading(true);
-    const [stockRes, catsRes, totalBikesRes] = await Promise.all([
+    const [stockRes, catsRes, totalBikesRes, commitmentsRes] = await Promise.all([
       supabase.from('available_stock_by_category').select('*').order('name', { ascending: true }),
       supabase
         .from('catalog_categories')
         .select('id, price_2h_cash, price_2h_transfer, price_1day_cash, price_1day_transfer')
         .eq('active', true),
-      supabase.from('bikes_inventory').select('category_id'),
+      supabase.from('bikes_inventory').select('category_id, status'),
+      supabase
+        .from('rentals')
+        .select('id, status, start_date, end_date, days_count, notes, rental_items(category_id, bike_id)')
+        // IMPORTANTE: Solo 'active' y 'reserved' bloquean stock por fecha. 'pending' no bloquea hasta activarse en mostrador.
+        .in('status', ['reserved', 'active']),
     ]);
 
     if (!stockRes.error && stockRes.data) {
       const catsMap = new Map((catsRes.data || []).map((c) => [c.id, c]));
 
-      const categoriesWithPhysicalUnits = new Set((totalBikesRes.data || []).map((b) => b.category_id));
+      const usableUnitsByCategory: Record<string, number> = {};
+      (totalBikesRes.data || []).forEach((b: any) => {
+        if (b.status !== 'maintenance' && b.status !== 'retired') {
+          usableUnitsByCategory[b.category_id] = (usableUnitsByCategory[b.category_id] || 0) + 1;
+        }
+      });
 
       const mergedVariants = stockRes.data
-        .filter((item: any) => catsMap.has(item.category_id) && categoriesWithPhysicalUnits.has(item.category_id))
+        .filter((item: any) => catsMap.has(item.category_id) && (usableUnitsByCategory[item.category_id] || 0) > 0)
         .map((item: any) => {
           const catPrices = catsMap.get(item.category_id)!;
           return {
@@ -203,10 +235,12 @@ export default function KioskCheckInPage() {
             price_2h_transfer: Number(catPrices.price_2h_transfer ?? item.price_2h_transfer ?? 0),
             price_1day_cash: Number(catPrices.price_1day_cash ?? item.price_1day_cash ?? 0),
             price_1day_transfer: Number(catPrices.price_1day_transfer ?? item.price_1day_transfer ?? 0),
+            total_physical_units: usableUnitsByCategory[item.category_id] || 0,
           };
         });
 
-      setVariants(mergedVariants as StockVariant[]);
+      setBaseCatalog(mergedVariants);
+      setActiveCommitments(commitmentsRes.data || []);
     }
     setLoading(false);
   };
@@ -224,6 +258,12 @@ export default function KioskCheckInPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'catalog_categories' }, () => {
         fetchAvailableStock();
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rentals' }, () => {
+        fetchAvailableStock();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rental_items' }, () => {
+        fetchAvailableStock();
+      })
       .subscribe();
 
     return () => {
@@ -231,7 +271,55 @@ export default function KioskCheckInPage() {
     };
   }, [isAuthorized]);
 
-  // Agrupa y ordena tanto las tarjetas como las variantes internas (R29 -> R26 -> Ebike y Talles S -> M -> L -> XL)
+  const variants: StockVariant[] = useMemo(() => {
+    const reqStart = formData.start_date || todayStr;
+    const reqEnd = calculateInclusiveEndDate(reqStart, formData.rental_type, formData.days_count);
+
+    const occupiedByCategory: Record<string, number> = {};
+
+    activeCommitments.forEach((rental: any) => {
+      const rStart = rental.start_date;
+      const rEnd = getEffectiveRentalEndDate(rental);
+      if (!rStart || !rEnd) return;
+
+      const overlaps =
+        rStart <= reqEnd &&
+        (rEnd >= reqStart || (rental.status === 'active' && reqStart <= todayStr));
+
+      if (overlaps) {
+        (rental.rental_items || []).forEach((item: any) => {
+          if (item.category_id) {
+            occupiedByCategory[item.category_id] = (occupiedByCategory[item.category_id] || 0) + 1;
+          }
+        });
+      }
+    });
+
+    return baseCatalog.map((item) => {
+      const committed = occupiedByCategory[item.category_id] || 0;
+      const available = Math.max(0, item.total_physical_units - committed);
+      return {
+        ...item,
+        available_count: available,
+      };
+    });
+  }, [baseCatalog, activeCommitments, formData.start_date, formData.rental_type, formData.days_count, todayStr]);
+
+  useEffect(() => {
+    if (variants.length === 0 || submitted) return;
+    setSelectedQuantities((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      variants.forEach((v) => {
+        if ((next[v.category_id] || 0) > v.available_count) {
+          next[v.category_id] = v.available_count;
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [variants, submitted]);
+
   const orderedGroups = useMemo(() => {
     const filtered = variants.filter((v) =>
       activeTab === 'bikes' ? v.type === 'bike' || v.type === 'ebike' : v.type === 'accessory'
@@ -243,12 +331,11 @@ export default function KioskCheckInPage() {
       groupsMap[v.name].push(v);
     });
 
-    // Ordenar las filas internas dentro de cada tarjeta (por rodado descendente y por talle S->M->L->XL)
     Object.keys(groupsMap).forEach((name) => {
       groupsMap[name].sort((a, b) => {
         const wA = parseFloat((a.wheel_size || '0').replace(/[^\d.]/g, '')) || 0;
         const wB = parseFloat((b.wheel_size || '0').replace(/[^\d.]/g, '')) || 0;
-        if (wA !== wB) return wB - wA; // Ej. R29 antes que R26
+        if (wA !== wB) return wB - wA;
 
         const fA = FRAME_ORDER[(a.frame_size || '').toUpperCase().trim()] ?? 99;
         const fB = FRAME_ORDER[(b.frame_size || '').toUpperCase().trim()] ?? 99;
@@ -264,12 +351,10 @@ export default function KioskCheckInPage() {
       const idxA = customCardOrder.indexOf(nameA);
       const idxB = customCardOrder.indexOf(nameB);
 
-      // Si ambos están en el orden personalizado del usuario, respetar su posición exacta
       if (idxA !== -1 && idxB !== -1) return idxA - idxB;
       if (idxA !== -1) return -1;
       if (idxB !== -1) return 1;
 
-      // Orden automático por defecto: R29 -> R26 -> Otras -> E-Bikes
       const prioA = getDefaultGroupPriority(nameA, varsA);
       const prioB = getDefaultGroupPriority(nameB, varsB);
       if (prioA !== prioB) return prioA - prioB;
@@ -280,7 +365,6 @@ export default function KioskCheckInPage() {
     return entries;
   }, [variants, activeTab, customCardOrder]);
 
-  // Función para subir o bajar una tarjeta y guardar el nuevo orden
   const moveCard = (index: number, direction: 'up' | 'down') => {
     const currentNames = orderedGroups.map(([name]) => name);
     const targetIndex = direction === 'up' ? index - 1 : index + 1;
@@ -291,7 +375,6 @@ export default function KioskCheckInPage() {
     swapped[index] = swapped[targetIndex];
     swapped[targetIndex] = temp;
 
-    // Conservar también el orden de la otra pestaña (accesorios o bicis)
     const otherNames = customCardOrder.filter((name) => !currentNames.includes(name));
     const updatedOrder = [...swapped, ...otherNames];
 
@@ -302,6 +385,7 @@ export default function KioskCheckInPage() {
   const resetCardOrder = () => {
     setCustomCardOrder([]);
     localStorage.removeItem('travelbikes_kiosk_card_order');
+    window.location.reload();
   };
 
   const updateQuantity = (categoryId: string, delta: number, maxAvailable: number) => {
@@ -356,16 +440,53 @@ export default function KioskCheckInPage() {
 
     setSubmitting(true);
     try {
-      const rentalId = crypto.randomUUID();
-      const startObj = new Date(formData.start_date + 'T00:00:00');
-      const endDate = new Date(startObj);
-      if (formData.rental_type === 'day') {
-        endDate.setDate(startObj.getDate() + formData.days_count);
+      const reqStart = formData.start_date;
+      const reqEnd = calculateInclusiveEndDate(reqStart, formData.rental_type, formData.days_count);
+
+      const [freshBikesRes, freshRentalsRes] = await Promise.all([
+        supabase.from('bikes_inventory').select('category_id, status'),
+        supabase
+          .from('rentals')
+          .select('id, status, start_date, end_date, days_count, notes, rental_items(category_id)')
+          .in('status', ['reserved', 'active']),
+      ]);
+
+      const physicalMap: Record<string, number> = {};
+      (freshBikesRes.data || []).forEach((b: any) => {
+        if (b.status !== 'maintenance' && b.status !== 'retired') {
+          physicalMap[b.category_id] = (physicalMap[b.category_id] || 0) + 1;
+        }
+      });
+
+      const occupiedMap: Record<string, number> = {};
+      (freshRentalsRes.data || []).forEach((r: any) => {
+        const rStart = r.start_date;
+        const rEnd = getEffectiveRentalEndDate(r);
+        if (!rStart || !rEnd) return;
+        const overlaps =
+          rStart <= reqEnd &&
+          (rEnd >= reqStart || (r.status === 'active' && reqStart <= todayStr));
+        if (overlaps) {
+          (r.rental_items || []).forEach((it: any) => {
+            occupiedMap[it.category_id] = (occupiedMap[it.category_id] || 0) + 1;
+          });
+        }
+      });
+
+      for (const item of selectedList) {
+        const remaining = Math.max(0, (physicalMap[item.category_id] || 0) - (occupiedMap[item.category_id] || 0));
+        if (item.qty > remaining) {
+          await fetchAvailableStock();
+          throw new Error(
+            `No hay suficiente disponibilidad para "${item.name}" en la fecha seleccionada (${reqStart}). Quedan ${remaining} unidad(es) disponibles.`
+          );
+        }
       }
 
+      const finalOrderTotal = totalAmount;
+      const rentalId = crypto.randomUUID();
       const initialStatus = formData.start_date > todayStr ? 'reserved' : 'pending';
       const dbPaymentMethod = formData.payment_method === 'debit' ? 'bank' : formData.payment_method;
-
       const timeNote = formData.rental_type === '2h' ? `[Horario: ${formData.start_time} hs - 2 horas]` : null;
 
       const { error: rentalError } = await supabase.from('rentals').insert({
@@ -376,10 +497,10 @@ export default function KioskCheckInPage() {
         customer_address: formData.customer_address,
         people_count: formData.people_count,
         days_count: formData.rental_type === '2h' ? 1 : formData.days_count,
-        start_date: formData.start_date,
-        end_date: endDate.toISOString().split('T')[0],
+        start_date: reqStart,
+        end_date: reqEnd,
         payment_method: dbPaymentMethod,
-        total_amount: totalAmount,
+        total_amount: finalOrderTotal,
         status: initialStatus,
         is_paid: false,
         notes: timeNote,
@@ -406,6 +527,7 @@ export default function KioskCheckInPage() {
       const { error: itemsError } = await supabase.from('rental_items').insert(itemsToInsert);
       if (itemsError) throw itemsError;
 
+      setConfirmedTotal(finalOrderTotal);
       setSubmitted(true);
     } catch (err: any) {
       alert('Hubo un error al registrar el alquiler: ' + err.message);
@@ -416,6 +538,7 @@ export default function KioskCheckInPage() {
 
   const resetKiosk = () => {
     setSelectedQuantities({});
+    setConfirmedTotal(0);
     setFormData({
       customer_name: '',
       customer_dni: '',
@@ -510,7 +633,7 @@ export default function KioskCheckInPage() {
           <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-zinc-900 dark:from-white via-orange-500 to-red-600" />
           <p className="text-slate-500 dark:text-zinc-400 text-sm uppercase tracking-wider font-semibold">Total a abonar</p>
           <p className="text-4xl font-black text-orange-600 dark:text-orange-500 mt-1">
-            ${totalAmount.toLocaleString('es-AR')}
+            ${confirmedTotal.toLocaleString('es-AR')}
           </p>
         </div>
         <button
