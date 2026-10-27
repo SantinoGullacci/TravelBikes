@@ -34,7 +34,7 @@ export default function CashRegisterPage() {
     setLoading(true);
     const { data: allData } = await supabase
       .from('rentals')
-      .select('id, customer_name, customer_dni, customer_address, payment_method, total_amount, created_at, end_date, status') // <-- INCLUIDO customer_address
+      .select('id, customer_name, customer_dni, customer_address, payment_method, total_amount, created_at, end_date, status')
       .eq('is_paid', true)
       .order('created_at', { ascending: false });
 
@@ -149,7 +149,7 @@ export default function CashRegisterPage() {
   const paymentLabels: Record<string, { label: string; icon: any; color: string }> = {
     cash: { label: 'Efectivo', icon: Banknote, color: 'text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800' },
     transfer: { label: 'Transferencia', icon: ArrowRightLeft, color: 'text-orange-700 dark:text-orange-400 bg-orange-50 dark:bg-orange-950/60 border-orange-200 dark:border-orange-800' },
-    bank: { label: 'Tarjeta / Débito', icon: CreditCard, color: 'text-sky-700 dark:text-sky-400 bg-sky-50 dark:bg-sky-950/60 border-sky-200 dark:border-sky-800' },
+    bank: { label: 'Débito', icon: CreditCard, color: 'text-sky-700 dark:text-sky-400 bg-sky-50 dark:bg-sky-950/60 border-sky-200 dark:border-sky-800' },
   };
 
   const selectedHistoryData = monthlyHistory.find(([m]) => m === selectedHistoryMonth)?.[1];
@@ -265,7 +265,7 @@ export default function CashRegisterPage() {
 
         <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 shadow-lg transition-colors">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-zinc-400">Tarjeta / Débito</span>
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-zinc-400">Débito</span>
             <CreditCard className="w-4 h-4 text-sky-600 dark:text-sky-400" />
           </div>
           <p className="text-2xl font-black text-sky-600 dark:text-sky-400 mt-1">
@@ -274,7 +274,7 @@ export default function CashRegisterPage() {
         </div>
       </div>
 
-      {/* Historial de Cajas Mensuales Anteriores (Con botón "Eliminar filtro" a la izquierda del selector) */}
+      {/* Historial de Cajas Mensuales Anteriores */}
       <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-5 shadow-xl transition-colors space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-800 pb-3">
           <div className="flex items-center gap-2">
@@ -284,7 +284,6 @@ export default function CashRegisterPage() {
             </h3>
           </div>
           
-          {/* Selector de Mes y Botón Eliminar Filtro a la izquierda */}
           <div className="flex flex-wrap items-center gap-2">
             {selectedHistoryMonth && (
               <button
