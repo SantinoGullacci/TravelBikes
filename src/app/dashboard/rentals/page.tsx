@@ -29,11 +29,11 @@ export default function RentalsDashboardPage() {
   const [rentals, setRentals] = useState<any[]>([]);
   const [allBikes, setAllBikes] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
+  const [pricingMap, setPricingMap] = useState<Record<string, any>>({});
   const [filterTab, setFilterTab] = useState<'pending' | 'active' | 'reserved'>('pending');
   const [loading, setLoading] = useState(true);
   const [processingId, setProcessingId] = useState<string | null>(null);
 
-  // Estado local para rastrear en tiempo real las unidades asignadas por ítem en la interfaz
   const [itemBikes, setItemBikes] = useState<Record<string, string>>({});
 
   const [reserveRental, setReserveRental] = useState<any | null>(null);
@@ -42,12 +42,26 @@ export default function RentalsDashboardPage() {
 
   const loadData = async () => {
     setLoading(true);
-    const data = await fetchRentalsAndStock();
+    const [data, catsWithPricesRes] = await Promise.all([
+      fetchRentalsAndStock(),
+      supabase
+        .from('catalog_categories')
+        .select('id, name, wheel_size, frame_size, price_2h_cash, price_2h_transfer, price_1day_cash, price_1day_transfer'),
+    ]);
+
     setRentals(data.rentals);
     setAllBikes(data.allBikes);
     setCategories(data.categories);
 
-    // Inicializar el mapeo local con las unidades que ya vienen de la base de datos
+    // Armamos un diccionario con todos los precios reales de catálogo por ID y por clave compuesta
+    const map: Record<string, any> = {};
+    (catsWithPricesRes.data || []).forEach((c: any) => {
+      map[c.id] = c;
+      const key = `${c.name || ''}|${c.wheel_size || ''}|${c.frame_size || ''}`;
+      map[key] = c;
+    });
+    setPricingMap(map);
+
     const initialMap: Record<string, string> = {};
     data.rentals.forEach((r: any) => {
       r.rental_items.forEach((item: any) => {
@@ -75,6 +89,9 @@ export default function RentalsDashboardPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'bikes_inventory' }, () => {
         loadData();
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'catalog_categories' }, () => {
+        loadData();
+      })
       .subscribe();
 
     return () => {
@@ -82,8 +99,48 @@ export default function RentalsDashboardPage() {
     };
   }, []);
 
+  // Busca la categoría con precios reales para un ítem sin importar cómo venga estructurado
+  const getCategoryPricesForItem = (item: any) => {
+    const catId = item.category_id || item.catalog_categories?.id;
+    if (catId && pricingMap[catId]) {
+      return pricingMap[catId];
+    }
+    if (item.catalog_categories) {
+      const key = `${item.catalog_categories.name || ''}|${item.catalog_categories.wheel_size || ''}|${item.catalog_categories.frame_size || ''}`;
+      if (pricingMap[key]) {
+        return pricingMap[key];
+      }
+    }
+    return item.catalog_categories || null;
+  };
+
+  // Recalcula el total según el medio de pago ('cash', 'transfer' o 'bank')
+  const calculateTotalByMethod = (rental: any, method: string) => {
+    if (!rental || !rental.rental_items || rental.rental_items.length === 0) {
+      return Number(rental?.total_amount || 0);
+    }
+
+    const is2Hours = Boolean(rental.notes?.includes('2 horas'));
+    const isTransferOrCard = method !== 'cash';
+    const multiplier = is2Hours ? 1 : Number(rental.days_count || 1);
+
+    return rental.rental_items.reduce((acc: number, item: any) => {
+      const cat = getCategoryPricesForItem(item);
+      if (!cat) return acc + Number(item.price_applied || 0);
+
+      const unitPrice = is2Hours
+        ? Number(isTransferOrCard ? cat.price_2h_transfer : cat.price_2h_cash)
+        : Number(isTransferOrCard ? cat.price_1day_transfer : cat.price_1day_cash);
+
+      if (!unitPrice || isNaN(unitPrice)) {
+        return acc + Number(item.price_applied || 0);
+      }
+
+      return acc + unitPrice * multiplier;
+    }, 0);
+  };
+
   const handleAssignBike = async (itemId: string, bikeId: string, rental: any) => {
-    // Validar si esta unidad ya está seleccionada en otro ítem de esta misma tarjeta
     const isDuplicate = rental.rental_items.some((otherItem: any) => {
       if (otherItem.id === itemId) return false;
       const currentSelectedBike = itemBikes[otherItem.id] || otherItem.bike_id;
@@ -95,7 +152,6 @@ export default function RentalsDashboardPage() {
       return;
     }
 
-    // Actualizar estado local inmediatamente para refrescar los selects
     setItemBikes((prev) => ({ ...prev, [itemId]: bikeId }));
 
     await updateRentalItemBike(itemId, bikeId || null);
@@ -115,7 +171,6 @@ export default function RentalsDashboardPage() {
         return;
       }
 
-      // Validación estricta: verificar que no haya unidades físicas duplicadas en el mismo alquiler
       const assignedBikeIds = rental.rental_items.map((item: any) => item.bike_id);
       const uniqueBikeIds = new Set(assignedBikeIds);
       if (assignedBikeIds.length !== uniqueBikeIds.size) {
@@ -256,7 +311,6 @@ export default function RentalsDashboardPage() {
                 <div className="space-y-2.5">
                   <p className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-zinc-400">Ítems:</p>
                   {rental.rental_items.map((item: any) => {
-                    // Recopilar IDs de unidades ya seleccionadas en otros ítems de esta misma tarjeta usando el estado local
                     const assignedBikeIdsInThisRental = rental.rental_items
                       .filter((otherItem: any) => otherItem.id !== item.id)
                       .map((otherItem: any) => itemBikes[otherItem.id] !== undefined ? itemBikes[otherItem.id] : otherItem.bike_id);
@@ -388,10 +442,58 @@ export default function RentalsDashboardPage() {
         <PaymentConfirmModal
           customerName={returnRental.customer_name}
           totalAmount={returnRental.total_amount}
+          cashAmount={calculateTotalByMethod(returnRental, 'cash')}
+          transferAmount={calculateTotalByMethod(returnRental, 'transfer')}
           initialMethod={returnRental.payment_method}
           onClose={() => setReturnRental(null)}
           onConfirm={async (method) => {
-            await supabase.from('rentals').update({ is_paid: true, payment_method: method, status: 'completed' }).eq('id', returnRental.id);
+            const finalAmount = calculateTotalByMethod(returnRental, method);
+            const is2Hours = Boolean(returnRental.notes?.includes('2 horas'));
+            const isTransferOrCard = method !== 'cash';
+            const multiplier = is2Hours ? 1 : Number(returnRental.days_count || 1);
+
+            // 1. Actualizar price_applied en cada ítem del alquiler
+            for (const item of returnRental.rental_items || []) {
+              const cat = getCategoryPricesForItem(item);
+              if (cat) {
+                const unitPrice = is2Hours
+                  ? Number(isTransferOrCard ? cat.price_2h_transfer : cat.price_2h_cash)
+                  : Number(isTransferOrCard ? cat.price_1day_transfer : cat.price_1day_cash);
+                if (unitPrice && !isNaN(unitPrice)) {
+                  await supabase
+                    .from('rental_items')
+                    .update({ price_applied: unitPrice * multiplier })
+                    .eq('id', item.id);
+                }
+              }
+            }
+
+            // 2. Actualizar el alquiler en la base de datos con el nuevo total y método antes de cerrar estado
+            await supabase
+              .from('rentals')
+              .update({
+                total_amount: finalAmount,
+                payment_method: method,
+                is_paid: true,
+              })
+              .eq('id', returnRental.id);
+
+            // 3. Ejecutar updateRentalStatus para completar alquiler, liberar unidades y generar movimiento en caja
+            await updateRentalStatus(returnRental.id, 'completed', {
+              is_paid: true,
+              payment_method: method,
+              total_amount: finalAmount,
+            });
+
+            // 4. Sincronizar el monto y método exactos en cash_transactions para Control de Caja
+            await supabase
+              .from('cash_transactions')
+              .update({
+                amount: finalAmount,
+                payment_method: method,
+              })
+              .eq('rental_id', returnRental.id);
+
             setReturnRental(null);
             loadData();
           }}
