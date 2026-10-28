@@ -54,9 +54,6 @@ const FRAME_ORDER: Record<string, number> = {
   UNICO: 7,
 };
 
-// E-Bikes al principio (Prioridad 5), luego R29 (10), R26 (20), etc.
-// Orden por defecto estricto: 1° E-Bikes, 2° R29, 3° R26, 4° Otras, 5° Accesorios
-// Orden por defecto estricto: 1° R29, 2° R26, 3° E-Bikes, 4° Otras, 5° Accesorios
 // Orden por defecto estricto: 1° R29, 2° R26, 3° E-Bikes, 4° Tándem/Otras, 5° Accesorios
 function getDefaultGroupPriority(modelName: string, variants: StockVariant[]): number {
   const first = variants[0];
@@ -70,7 +67,7 @@ function getDefaultGroupPriority(modelName: string, variants: StockVariant[]): n
   // E-Bikes terceras estrictas (debajo de R26 que tiene 20, y antes del Tándem que tendrá 30)
   const nameUpper = modelName.toUpperCase();
   if (first.type === 'ebike' || nameUpper.includes('E-BIKE') || nameUpper.includes('ELECTRICA')) {
-    return 25; 
+    return 25;
   }
 
   return 30; // 4° Tándem, Infantiles, etc.
@@ -87,11 +84,12 @@ const calculateInclusiveEndDate = (startDateStr: string, rentalType: '2h' | 'day
   return endObj.toISOString().split('T')[0];
 };
 
-const getEffectiveRentalEndDate = (rental: any) => {
-  if (!rental.start_date) return '';
+const getEffectiveRentalEndDate = (rental: any, customStartDate?: string) => {
+  const baseStart = customStartDate || rental.start_date;
+  if (!baseStart) return '';
   const is2Hours = Boolean(rental.notes?.includes('2 horas'));
   const days = is2Hours ? 1 : Math.max(1, Number(rental.days_count || 1));
-  return calculateInclusiveEndDate(rental.start_date, is2Hours ? '2h' : 'day', days);
+  return calculateInclusiveEndDate(baseStart, is2Hours ? '2h' : 'day', days);
 };
 
 export default function KioskCheckInPage() {
@@ -278,13 +276,17 @@ export default function KioskCheckInPage() {
     const occupiedByCategory: Record<string, number> = {};
 
     activeCommitments.forEach((rental: any) => {
-      const rStart = rental.start_date;
-      const rEnd = getEffectiveRentalEndDate(rental);
-      if (!rStart || !rEnd) return;
+      // Regla de negocio: Si un alquiler está ACTIVO, las bicis se entregaron hoy y vuelven hoy.
+      // Ya no existe como reserva futura, por lo que solo bloquea el día de hoy (todayStr).
+      const isCurrentlyActive = rental.status === 'active';
+      const effectiveStart = isCurrentlyActive ? todayStr : rental.start_date;
+      const effectiveEnd = isCurrentlyActive
+        ? todayStr
+        : getEffectiveRentalEndDate(rental, effectiveStart);
 
-      const overlaps =
-        rStart <= reqEnd &&
-        (rEnd >= reqStart || (rental.status === 'active' && reqStart <= todayStr));
+      if (!effectiveStart || !effectiveEnd) return;
+
+      const overlaps = effectiveStart <= reqEnd && effectiveEnd >= reqStart;
 
       if (overlaps) {
         (rental.rental_items || []).forEach((item: any) => {
@@ -460,12 +462,15 @@ export default function KioskCheckInPage() {
 
       const occupiedMap: Record<string, number> = {};
       (freshRentalsRes.data || []).forEach((r: any) => {
-        const rStart = r.start_date;
-        const rEnd = getEffectiveRentalEndDate(r);
-        if (!rStart || !rEnd) return;
-        const overlaps =
-          rStart <= reqEnd &&
-          (rEnd >= reqStart || (r.status === 'active' && reqStart <= todayStr));
+        const isCurrentlyActive = r.status === 'active';
+        const effectiveStart = isCurrentlyActive ? todayStr : r.start_date;
+        const effectiveEnd = isCurrentlyActive
+          ? todayStr
+          : getEffectiveRentalEndDate(r, effectiveStart);
+
+        if (!effectiveStart || !effectiveEnd) return;
+
+        const overlaps = effectiveStart <= reqEnd && effectiveEnd >= reqStart;
         if (overlaps) {
           (r.rental_items || []).forEach((it: any) => {
             occupiedMap[it.category_id] = (occupiedMap[it.category_id] || 0) + 1;

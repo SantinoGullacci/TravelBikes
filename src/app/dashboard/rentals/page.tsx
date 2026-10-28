@@ -162,17 +162,24 @@ export default function RentalsDashboardPage() {
   };
 
   // Devuelve un Set con los bike_id ya comprometidos en OTROS alquileres/reservas cuyas fechas se pisen con este alquiler
-  const getConflictingBikeIdsForRental = (targetRental: any, customStartDate?: string) => {
+  const getConflictingBikeIdsForRental = (targetRental: any, customStartDate?: string, forceSingleDayToday?: boolean) => {
+    const today = new Date().toISOString().split('T')[0];
     const targetStart = customStartDate || targetRental.start_date;
-    const targetEnd = calculateInclusiveEndDate(targetStart, targetRental.days_count, targetRental.notes);
+    const targetEnd = forceSingleDayToday
+      ? targetStart
+      : calculateInclusiveEndDate(targetStart, targetRental.days_count, targetRental.notes);
     const conflictingBikeIds = new Set<string>();
 
     rentals.forEach((otherRental: any) => {
       if (otherRental.id === targetRental.id) return;
       if (!['pending', 'reserved', 'active'].includes(otherRental.status)) return;
 
-      const otherStart = otherRental.start_date;
-      const otherEnd = calculateInclusiveEndDate(otherStart, otherRental.days_count, otherRental.notes);
+      // Si el otro alquiler está activo, ocupa hoy y vuelve hoy
+      const otherStart = otherRental.status === 'active' ? today : otherRental.start_date;
+      const otherEnd =
+        otherRental.status === 'active'
+          ? today
+          : calculateInclusiveEndDate(otherStart, otherRental.days_count, otherRental.notes);
 
       if (doRentalDatesOverlap(targetStart, targetEnd, otherStart, otherEnd)) {
         (otherRental.rental_items || []).forEach((otherItem: any) => {
@@ -188,8 +195,11 @@ export default function RentalsDashboardPage() {
   };
 
   // Verifica que activar o reservar este pedido para una fecha no supere el stock físico real de cada categoría
-  const validateCategoryQuotaForDates = (targetRental: any, targetStartDate: string) => {
-    const targetEnd = calculateInclusiveEndDate(targetStartDate, targetRental.days_count, targetRental.notes);
+  const validateCategoryQuotaForDates = (targetRental: any, targetStartDate: string, isActivatingNow = false) => {
+    const today = new Date().toISOString().split('T')[0];
+    const targetEnd = isActivatingNow
+      ? targetStartDate
+      : calculateInclusiveEndDate(targetStartDate, targetRental.days_count, targetRental.notes);
 
     // Contar cuántas unidades pide este alquiler por categoría
     const requestedByCat: Record<string, { qty: number; name: string }> = {};
@@ -210,8 +220,11 @@ export default function RentalsDashboardPage() {
         if (other.id === targetRental.id) return;
         if (!['reserved', 'active'].includes(other.status)) return;
 
-        const otherStart = other.start_date;
-        const otherEnd = calculateInclusiveEndDate(otherStart, other.days_count, other.notes);
+        const otherStart = other.status === 'active' ? today : other.start_date;
+        const otherEnd =
+          other.status === 'active'
+            ? today
+            : calculateInclusiveEndDate(otherStart, other.days_count, other.notes);
 
         if (doRentalDatesOverlap(targetStartDate, targetEnd, otherStart, otherEnd)) {
           (other.rental_items || []).forEach((otherItem: any) => {
@@ -266,15 +279,20 @@ export default function RentalsDashboardPage() {
   };
 
   const handleChangeStatus = async (rental: any, newStatus: string, extra: any = {}) => {
-    const targetStartDate = extra.start_date || rental.start_date;
+    const currentToday = new Date().toISOString().split('T')[0];
+    const updatedExtra = { ...extra };
+
+    // Cuando un alquiler o reserva pasa a ACTIVO, se lleva las bicis HOY y vuelven HOY.
+    const isActivating = newStatus === 'active';
+    const targetStartDate = isActivating ? currentToday : (updatedExtra.start_date || rental.start_date);
 
     if (newStatus === 'reserved' || newStatus === 'active') {
-      if (!validateCategoryQuotaForDates(rental, targetStartDate)) {
+      if (!validateCategoryQuotaForDates(rental, targetStartDate, isActivating)) {
         return;
       }
     }
 
-    if (newStatus === 'active') {
+    if (isActivating) {
       const missingBike = rental.rental_items.some((item: any) => !item.bike_id);
       if (missingBike) {
         alert('Asigná una unidad física a cada ítem antes de activar el alquiler.');
@@ -288,16 +306,33 @@ export default function RentalsDashboardPage() {
         return;
       }
 
-      const conflictingBikes = getConflictingBikeIdsForRental(rental, targetStartDate);
+      const conflictingBikes = getConflictingBikeIdsForRental(rental, currentToday, true);
       const hasDateConflict = assignedBikeIds.some((id: string) => conflictingBikes.has(id));
       if (hasDateConflict) {
-        alert('Error: Una de las unidades físicas asignadas está comprometida en otra reserva o alquiler para estas fechas.');
+        alert('Error: Una de las unidades físicas asignadas ya está en uso hoy en otro alquiler.');
         return;
+      }
+
+      // Al activarse hoy, deja de existir como reserva futura: empieza hoy y termina hoy
+      updatedExtra.start_date = currentToday;
+      updatedExtra.end_date = currentToday;
+
+      // Actualización directa en BD para garantizar que start_date y end_date pasen a hoy aunque rentalsService ignore extra
+      await supabase
+        .from('rentals')
+        .update({
+          start_date: currentToday,
+          end_date: currentToday,
+        })
+        .eq('id', rental.id);
+
+      if (assignedBikeIds.length > 0) {
+        await supabase.from('bikes_inventory').update({ status: 'rented' }).in('id', assignedBikeIds);
       }
     }
 
     setProcessingId(rental.id);
-    await updateRentalStatus(rental.id, newStatus, extra);
+    await updateRentalStatus(rental.id, newStatus, updatedExtra);
     setProcessingId(null);
     loadData();
   };
