@@ -2,7 +2,20 @@
 
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Wallet, DollarSign, Calendar, RefreshCw, Banknote, CreditCard, ArrowRightLeft, Search, History, TrendingUp, X } from 'lucide-react';
+import {
+  Wallet,
+  DollarSign,
+  Calendar,
+  RefreshCw,
+  Banknote,
+  CreditCard,
+  ArrowRightLeft,
+  Search,
+  History,
+  TrendingUp,
+  X,
+  AlertCircle,
+} from 'lucide-react';
 
 interface RentalTransaction {
   id: string;
@@ -14,6 +27,7 @@ interface RentalTransaction {
   created_at: string;
   end_date: string;
   status: string;
+  notes?: string | null;
 }
 
 export default function CashRegisterPage() {
@@ -34,7 +48,7 @@ export default function CashRegisterPage() {
     setLoading(true);
     const { data: allData } = await supabase
       .from('rentals')
-      .select('id, customer_name, customer_dni, customer_address, payment_method, total_amount, created_at, end_date, status')
+      .select('id, customer_name, customer_dni, customer_address, payment_method, total_amount, created_at, end_date, status, notes')
       .eq('is_paid', true)
       .order('created_at', { ascending: false });
 
@@ -96,7 +110,6 @@ export default function CashRegisterPage() {
       } else if (endDate) {
         return rDate <= endDate;
       } else {
-        // Por defecto mes actual
         return rMonth === currentMonthStr;
       }
     });
@@ -169,7 +182,7 @@ export default function CashRegisterPage() {
         </button>
       </div>
 
-      {/* Barra de Filtros (Fechas + Búsqueda de cliente a la derecha) */}
+      {/* Barra de Filtros */}
       <div className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-slate-200 dark:border-zinc-800 shadow-xl flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 transition-colors">
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
@@ -201,7 +214,6 @@ export default function CashRegisterPage() {
           </div>
         </div>
 
-        {/* Búsqueda de cliente a la derecha */}
         <div className="relative min-w-[240px]">
           <Search className="w-4 h-4 text-orange-600 dark:text-orange-500 absolute left-3.5 top-3.5" />
           <input
@@ -214,7 +226,7 @@ export default function CashRegisterPage() {
         </div>
       </div>
 
-      {/* Contadores de Caja Diaria y Mensual */}
+      {/* Contadores Diaria y Mensual */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-5 shadow-xl relative overflow-hidden transition-colors">
           <div className="absolute top-0 left-0 right-0 h-1.5 bg-emerald-500" />
@@ -241,7 +253,7 @@ export default function CashRegisterPage() {
         </div>
       </div>
 
-      {/* Métodos de Pago del Rango / Mes Activo */}
+      {/* Resumen por método de pago */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-4 shadow-lg transition-colors">
           <div className="flex items-center justify-between">
@@ -274,7 +286,7 @@ export default function CashRegisterPage() {
         </div>
       </div>
 
-      {/* Historial de Cajas Mensuales Anteriores */}
+      {/* Historial meses anteriores */}
       <div className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-5 shadow-xl transition-colors space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 dark:border-zinc-800 pb-3">
           <div className="flex items-center gap-2">
@@ -283,7 +295,7 @@ export default function CashRegisterPage() {
               Historial de Cajas Mensuales Anteriores
             </h3>
           </div>
-          
+
           <div className="flex flex-wrap items-center gap-2">
             {selectedHistoryMonth && (
               <button
@@ -315,7 +327,6 @@ export default function CashRegisterPage() {
           </div>
         </div>
 
-        {/* Tarjeta de Resumen del Mes Histórico Seleccionado */}
         {selectedHistoryData && selectedHistoryMonth && (
           <div className="bg-orange-50/50 dark:bg-zinc-950 p-4 rounded-xl border border-orange-200 dark:border-orange-500/30 flex flex-wrap items-center justify-between gap-4">
             <div>
@@ -333,7 +344,7 @@ export default function CashRegisterPage() {
         )}
       </div>
 
-      {/* Listado Detallado de Cobros */}
+      {/* Listado de cobros con el distintivo al lado del método de pago */}
       {loading ? (
         <p className="text-slate-500 dark:text-zinc-400 py-12 text-center font-medium">Calculando caja...</p>
       ) : filteredRentals.length === 0 ? (
@@ -359,6 +370,10 @@ export default function CashRegisterPage() {
                 timeStyle: 'short',
               });
 
+              const isLate = Boolean(
+                rental.notes && (rental.notes.includes('Demora') || rental.notes.includes('demora'))
+              );
+
               return (
                 <div key={rental.id} className="p-4 flex flex-wrap items-center justify-between gap-4 hover:bg-slate-50 dark:hover:bg-zinc-800/40 transition">
                   <div>
@@ -370,7 +385,12 @@ export default function CashRegisterPage() {
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
+                    {isLate && (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800">
+                        <AlertCircle className="w-3.5 h-3.5" /> Devolución con demora
+                      </span>
+                    )}
                     <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${pm.color}`}>
                       <PaymentIcon className="w-3.5 h-3.5" /> {pm.label}
                     </span>

@@ -23,9 +23,10 @@ import {
   Edit3,
   DollarSign,
   MapPin,
+  AlertCircle,
 } from 'lucide-react';
 
-// Calcula el fin inclusivo real del alquiler (1 día el miércoles = empieza y termina el miércoles)
+// Calcula el fin inclusivo real del alquiler
 const calculateInclusiveEndDate = (startDateStr: string, daysCount: number, notes?: string | null) => {
   if (!startDateStr) return '';
   const is2Hours = Boolean(notes?.includes('2 horas'));
@@ -38,7 +39,6 @@ const calculateInclusiveEndDate = (startDateStr: string, daysCount: number, note
   return endObj.toISOString().split('T')[0];
 };
 
-// Evalúa si dos rangos de fechas se solapan
 const doRentalDatesOverlap = (
   startA: string,
   endA: string,
@@ -47,6 +47,23 @@ const doRentalDatesOverlap = (
 ) => {
   if (!startA || !endA || !startB || !endB) return false;
   return startA <= endB && endA >= startB;
+};
+
+// Parsea y suma 2 horas al horario registrado en notas
+const getTwoHoursInfo = (notes?: string | null) => {
+  if (!notes) return null;
+  const match = notes.match(/(\d{1,2}:\d{2})\s*hs/i);
+  if (!match) return null;
+
+  const startTimeStr = match[1];
+  const [hStr, mStr] = startTimeStr.split(':');
+  let h = parseInt(hStr, 10);
+  const m = parseInt(mStr, 10);
+
+  const estimatedEndHour = (h + 2) % 24;
+  const endTimeStr = `${estimatedEndHour < 10 ? '0' : ''}${estimatedEndHour}:${m < 10 ? '0' : ''}${m}`;
+
+  return { startTimeStr, endTimeStr };
 };
 
 export default function RentalsDashboardPage() {
@@ -62,6 +79,7 @@ export default function RentalsDashboardPage() {
 
   const [reserveRental, setReserveRental] = useState<any | null>(null);
   const [returnRental, setReturnRental] = useState<any | null>(null);
+  const [isLateFeeActive, setIsLateFeeActive] = useState<boolean>(false);
   const [editRental, setEditRental] = useState<any | null>(null);
 
   const loadData = async () => {
@@ -136,14 +154,14 @@ export default function RentalsDashboardPage() {
     return item.catalog_categories || null;
   };
 
-  const calculateTotalByMethod = (rental: any, method: string) => {
+  const calculateTotalByMethod = (rental: any, method: string, forceDayTariff = false) => {
     if (!rental || !rental.rental_items || rental.rental_items.length === 0) {
       return Number(rental?.total_amount || 0);
     }
 
-    const is2Hours = Boolean(rental.notes?.includes('2 horas'));
+    const is2Hours = !forceDayTariff && Boolean(rental.notes?.includes('2 horas'));
     const isTransferOrCard = method !== 'cash';
-    const multiplier = is2Hours ? 1 : Number(rental.days_count || 1);
+    const multiplier = is2Hours ? 1 : Math.max(1, Number(rental.days_count || 1));
 
     return rental.rental_items.reduce((acc: number, item: any) => {
       const cat = getCategoryPricesForItem(item);
@@ -161,7 +179,6 @@ export default function RentalsDashboardPage() {
     }, 0);
   };
 
-  // Devuelve un Set con los bike_id ya comprometidos en OTROS alquileres/reservas cuyas fechas se pisen con este alquiler
   const getConflictingBikeIdsForRental = (targetRental: any, customStartDate?: string, forceSingleDayToday?: boolean) => {
     const today = new Date().toISOString().split('T')[0];
     const targetStart = customStartDate || targetRental.start_date;
@@ -174,7 +191,6 @@ export default function RentalsDashboardPage() {
       if (otherRental.id === targetRental.id) return;
       if (!['pending', 'reserved', 'active'].includes(otherRental.status)) return;
 
-      // Si el otro alquiler está activo, ocupa hoy y vuelve hoy
       const otherStart = otherRental.status === 'active' ? today : otherRental.start_date;
       const otherEnd =
         otherRental.status === 'active'
@@ -194,14 +210,12 @@ export default function RentalsDashboardPage() {
     return conflictingBikeIds;
   };
 
-  // Verifica que activar o reservar este pedido para una fecha no supere el stock físico real de cada categoría
   const validateCategoryQuotaForDates = (targetRental: any, targetStartDate: string, isActivatingNow = false) => {
     const today = new Date().toISOString().split('T')[0];
     const targetEnd = isActivatingNow
       ? targetStartDate
       : calculateInclusiveEndDate(targetStartDate, targetRental.days_count, targetRental.notes);
 
-    // Contar cuántas unidades pide este alquiler por categoría
     const requestedByCat: Record<string, { qty: number; name: string }> = {};
     (targetRental.rental_items || []).forEach((it: any) => {
       const catId = it.category_id;
@@ -282,7 +296,6 @@ export default function RentalsDashboardPage() {
     const currentToday = new Date().toISOString().split('T')[0];
     const updatedExtra = { ...extra };
 
-    // Cuando un alquiler o reserva pasa a ACTIVO, se lleva las bicis HOY y vuelven HOY.
     const isActivating = newStatus === 'active';
     const targetStartDate = isActivating ? currentToday : (updatedExtra.start_date || rental.start_date);
 
@@ -313,11 +326,9 @@ export default function RentalsDashboardPage() {
         return;
       }
 
-      // Al activarse hoy, deja de existir como reserva futura: empieza hoy y termina hoy
       updatedExtra.start_date = currentToday;
       updatedExtra.end_date = currentToday;
 
-      // Actualización directa en BD para garantizar que start_date y end_date pasen a hoy aunque rentalsService ignore extra
       await supabase
         .from('rentals')
         .update({
@@ -337,8 +348,18 @@ export default function RentalsDashboardPage() {
     loadData();
   };
 
-  const handleReturnClick = (rental: any) => {
-    if (rental.is_paid) {
+  const handleCancelClick = (rental: any) => {
+    const isConfirmed = window.confirm(
+      `¿Estás seguro de que querés cancelar el alquiler de ${rental.customer_name}? Esta acción liberará las bicicletas asignadas.`
+    );
+    if (!isConfirmed) return;
+
+    handleChangeStatus(rental, 'cancelled');
+  };
+
+  const handleReturnClick = (rental: any, withLateFee = false) => {
+    setIsLateFeeActive(withLateFee);
+    if (rental.is_paid && !withLateFee) {
       handleChangeStatus(rental, 'completed');
     } else {
       setReturnRental(rental);
@@ -358,7 +379,7 @@ export default function RentalsDashboardPage() {
   const paymentLabels: Record<string, string> = {
     cash: 'Efectivo',
     transfer: 'Transferencia',
-    bank: 'Tarjeta / Banco',
+    bank: 'Débito',
   };
 
   return (
@@ -415,6 +436,12 @@ export default function RentalsDashboardPage() {
           {filteredRentals.map((rental) => {
             const conflictingBikesForThisRental = getConflictingBikeIdsForRental(rental);
             const isFutureReservation = rental.start_date > todayStr;
+            const is2Hours = Boolean(rental.notes?.includes('2 horas'));
+            const twoHoursInfo = getTwoHoursInfo(rental.notes);
+
+            const creationTimeStr = rental.created_at
+              ? new Date(rental.created_at).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }) + ' hs'
+              : '';
 
             return (
               <div key={rental.id} className="bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-6 flex flex-col justify-between space-y-5 shadow-xl relative overflow-hidden transition-colors">
@@ -443,18 +470,47 @@ export default function RentalsDashboardPage() {
                           <MapPin className="w-3 h-3 inline text-orange-600 dark:text-orange-500" /> Alojamiento/Dir: <strong className="text-slate-900 dark:text-white">{rental.customer_address}</strong>
                         </p>
                       )}
-                      {rental.status === 'reserved' && (
-                        <p className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-orange-50 dark:bg-orange-500/10 border border-orange-200 dark:border-orange-500/30 text-orange-700 dark:text-orange-400 text-xs font-bold">
-                          <Calendar className="w-3.5 h-3.5" /> Retiro: {rental.start_date}
-                        </p>
-                      )}
+
+                      {/* DETALLE SEGÚN TIPO DE ALQUILER */}
+                      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                        {is2Hours ? (
+                          <>
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-50 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 text-sky-700 dark:text-sky-300 text-xs font-extrabold">
+                              <Clock className="w-3.5 h-3.5" /> Tipo: 2 Horas
+                            </span>
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 text-slate-700 dark:text-zinc-300 text-xs font-bold">
+                              Horario de salida: <strong className="text-slate-900 dark:text-white ml-0.5">{twoHoursInfo?.startTimeStr ? `${twoHoursInfo.startTimeStr} hs` : creationTimeStr}</strong>
+                            </span>
+                            {twoHoursInfo?.endTimeStr && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-orange-50 dark:bg-orange-950/60 border border-orange-200 dark:border-orange-800 text-orange-700 dark:text-orange-400 text-xs font-black">
+                                Devolución estimada: <strong className="text-orange-600 dark:text-orange-300 ml-0.5">{twoHoursInfo.endTimeStr} hs</strong>
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs font-extrabold">
+                              <Calendar className="w-3.5 h-3.5" /> Tipo: Por Día
+                            </span>
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 text-slate-700 dark:text-zinc-300 text-xs font-bold">
+                              Fecha: <strong className="text-slate-900 dark:text-white ml-0.5">{rental.start_date}</strong>
+                            </span>
+                            {creationTimeStr && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 text-slate-700 dark:text-zinc-300 text-xs font-bold">
+                                Hora: <strong className="text-slate-900 dark:text-white ml-0.5">{creationTimeStr}</strong>
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </div>
                     </div>
+
                     <div className="text-right space-y-1">
                       <span className="text-2xl font-black text-orange-600 dark:text-orange-500 block">
                         ${Number(rental.total_amount).toLocaleString('es-AR')}
                       </span>
                       <p className="text-xs text-slate-500 dark:text-zinc-400 font-medium">
-                        {paymentLabels[rental.payment_method]} • {rental.days_count} día/s
+                        {paymentLabels[rental.payment_method] || rental.payment_method} • {is2Hours ? '2 Horas' : `${rental.days_count} día/s`}
                       </p>
                       {rental.status !== 'pending' && (
                         <span className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-extrabold tracking-wide uppercase ${rental.is_paid ? 'bg-slate-900 dark:bg-white/10 text-white border border-slate-800 dark:border-white/30' : 'bg-red-100 dark:bg-red-600/20 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-500/40'}`}>
@@ -471,11 +527,9 @@ export default function RentalsDashboardPage() {
                         .filter((otherItem: any) => otherItem.id !== item.id)
                         .map((otherItem: any) => itemBikes[otherItem.id] !== undefined ? itemBikes[otherItem.id] : otherItem.bike_id);
 
-                      // Filtramos las unidades que pertenecen a la categoría, no están en mantenimiento ni ocupadas en esas fechas
                       const matchingBikes = allBikes.filter((b: any) => {
                         if (b.category_id !== item.category_id) return false;
                         if (b.status === 'maintenance' || b.status === 'retired') return false;
-                        // Si el pedido es para hoy, la bici tiene que estar físicamente disponible ahora
                         if (!isFutureReservation && b.status !== 'available') return false;
                         if (assignedBikeIdsInThisRental.includes(b.id)) return false;
                         if (conflictingBikesForThisRental.has(b.id)) return false;
@@ -550,7 +604,10 @@ export default function RentalsDashboardPage() {
                 <div className="pt-3 border-t border-slate-100 dark:border-zinc-800 flex flex-wrap gap-2 justify-end">
                   {rental.status === 'pending' && (
                     <>
-                      <button onClick={() => handleChangeStatus(rental, 'cancelled')} className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-red-100 dark:hover:bg-red-950 text-slate-700 dark:text-zinc-300 hover:text-red-700 dark:hover:text-red-300 text-xs font-bold transition">
+                      <button
+                        onClick={() => handleCancelClick(rental)}
+                        className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-red-100 dark:hover:bg-red-950 text-slate-700 dark:text-zinc-300 hover:text-red-700 dark:hover:text-red-300 text-xs font-bold transition"
+                      >
                         Cancelar
                       </button>
                       <button onClick={() => setReserveRental(rental)} className="px-4 py-2 rounded-xl bg-slate-50 dark:bg-zinc-950 hover:bg-slate-100 dark:hover:bg-zinc-800 text-orange-600 dark:text-orange-400 text-xs font-bold border border-orange-200 dark:border-orange-500/40 transition">
@@ -563,7 +620,10 @@ export default function RentalsDashboardPage() {
                   )}
                   {rental.status === 'reserved' && (
                     <>
-                      <button onClick={() => handleChangeStatus(rental, 'cancelled')} className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-red-100 dark:hover:bg-red-950 text-slate-700 dark:text-zinc-300 hover:text-red-700 dark:hover:text-red-300 text-xs font-bold transition">
+                      <button
+                        onClick={() => handleCancelClick(rental)}
+                        className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-zinc-800 hover:bg-red-100 dark:hover:bg-red-950 text-slate-700 dark:text-zinc-300 hover:text-red-700 dark:hover:text-red-300 text-xs font-bold transition"
+                      >
                         Cancelar
                       </button>
                       <button onClick={() => handleChangeStatus(rental, 'active')} className="px-5 py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-extrabold uppercase tracking-wider transition shadow-md shadow-orange-600/30 dark:shadow-orange-950/50">
@@ -572,9 +632,27 @@ export default function RentalsDashboardPage() {
                     </>
                   )}
                   {rental.status === 'active' && (
-                    <button onClick={() => handleReturnClick(rental)} className="w-full py-2.5 rounded-xl bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-500 hover:to-red-500 text-white text-sm font-extrabold uppercase tracking-wider transition shadow-lg shadow-orange-600/30 dark:shadow-orange-950/50">
-                      Registrar Devolución
-                    </button>
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full justify-end">
+                      <button
+                        type="button"
+                        onClick={() => handleReturnClick(rental, false)}
+                        className={`py-2.5 px-4 rounded-xl bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-500 hover:to-red-500 text-white text-xs font-extrabold uppercase tracking-wider transition shadow-lg shadow-orange-600/30 dark:shadow-orange-950/50 ${
+                          is2Hours ? 'flex-1' : 'w-full text-sm'
+                        }`}
+                      >
+                        Registrar Devolución
+                      </button>
+                      {is2Hours && (
+                        <button
+                          type="button"
+                          onClick={() => handleReturnClick(rental, true)}
+                          className="flex-1 py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs uppercase tracking-wider transition shadow-md flex items-center justify-center gap-1.5"
+                          title="Cobra la tarifa completa por día debido al retraso"
+                        >
+                          <AlertCircle className="w-4 h-4 shrink-0" /> Devolución con Demora
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -604,30 +682,38 @@ export default function RentalsDashboardPage() {
         <PaymentConfirmModal
           customerName={returnRental.customer_name}
           totalAmount={returnRental.total_amount}
-          cashAmount={calculateTotalByMethod(returnRental, 'cash')}
-          transferAmount={calculateTotalByMethod(returnRental, 'transfer')}
+          cashAmount={calculateTotalByMethod(returnRental, 'cash', isLateFeeActive)}
+          transferAmount={calculateTotalByMethod(returnRental, 'transfer', isLateFeeActive)}
+          isLateFee={isLateFeeActive}
           initialMethod={returnRental.payment_method}
-          onClose={() => setReturnRental(null)}
-          onConfirm={async (method) => {
-            const finalAmount = calculateTotalByMethod(returnRental, method);
-            const is2Hours = Boolean(returnRental.notes?.includes('2 horas'));
+          onClose={() => {
+            setReturnRental(null);
+            setIsLateFeeActive(false);
+          }}
+          onConfirm={async (method: string) => {
+            const finalAmount = calculateTotalByMethod(returnRental, method, isLateFeeActive);
             const isTransferOrCard = method !== 'cash';
-            const multiplier = is2Hours ? 1 : Number(returnRental.days_count || 1);
 
             for (const item of returnRental.rental_items || []) {
               const cat = getCategoryPricesForItem(item);
               if (cat) {
+                const is2Hours = !isLateFeeActive && Boolean(returnRental.notes?.includes('2 horas'));
                 const unitPrice = is2Hours
                   ? Number(isTransferOrCard ? cat.price_2h_transfer : cat.price_2h_cash)
                   : Number(isTransferOrCard ? cat.price_1day_transfer : cat.price_1day_cash);
+
                 if (unitPrice && !isNaN(unitPrice)) {
                   await supabase
                     .from('rental_items')
-                    .update({ price_applied: unitPrice * multiplier })
+                    .update({ price_applied: unitPrice })
                     .eq('id', item.id);
                 }
               }
             }
+
+            const updatedNotes = isLateFeeActive
+              ? `${returnRental.notes || ''} [Devuelto con Demora - Tarifa x Día Cobrada]`.trim()
+              : returnRental.notes;
 
             await supabase
               .from('rentals')
@@ -635,6 +721,7 @@ export default function RentalsDashboardPage() {
                 total_amount: finalAmount,
                 payment_method: method,
                 is_paid: true,
+                notes: updatedNotes,
               })
               .eq('id', returnRental.id);
 
@@ -642,6 +729,7 @@ export default function RentalsDashboardPage() {
               is_paid: true,
               payment_method: method,
               total_amount: finalAmount,
+              notes: updatedNotes,
             });
 
             await supabase
@@ -653,6 +741,7 @@ export default function RentalsDashboardPage() {
               .eq('rental_id', returnRental.id);
 
             setReturnRental(null);
+            setIsLateFeeActive(false);
             loadData();
           }}
         />
