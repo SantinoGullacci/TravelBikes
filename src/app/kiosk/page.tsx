@@ -54,6 +54,15 @@ const FRAME_ORDER: Record<string, number> = {
   UNICO: 7,
 };
 
+// Obtiene la fecha local YYYY-MM-DD sin desfasaje UTC en móviles
+const getLocalTodayStr = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 // Orden por defecto estricto: 1° R29, 2° R26, 3° E-Bikes, 4° Tándem/Otras, 5° Accesorios
 function getDefaultGroupPriority(modelName: string, variants: StockVariant[]): number {
   const first = variants[0];
@@ -121,7 +130,7 @@ export default function KioskCheckInPage() {
     rental_type: 'day' as '2h' | 'day',
     days_count: 1,
     start_date: '',
-    start_time: '09:00',
+    start_time: '',
     payment_method: 'cash' as 'cash' | 'debit' | 'transfer',
   });
 
@@ -153,7 +162,7 @@ export default function KioskCheckInPage() {
 
     verifySession();
 
-    const currentDay = new Date().toISOString().split('T')[0];
+    const currentDay = getLocalTodayStr();
     setTodayStr(currentDay);
     setFormData((prev) => ({
       ...prev,
@@ -433,12 +442,58 @@ export default function KioskCheckInPage() {
   const totalSelectedItems = selectedList.reduce((acc, item) => acc + item.qty, 0);
   const totalAmount = selectedList.reduce((sum, item) => sum + item.subtotal, 0);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const hoursOptions = useMemo(() => {
+    const options: string[] = [];
+    if (!now) return options;
+
+    const isToday = formData.start_date === todayStr;
+    const currentTotalMinutes = now.getHours() * 60 + now.getMinutes();
+
+    for (let h = 8; h <= 21; h++) {
+      for (let m = 0; m < 60; m += 15) {
+        if (h === 21 && m > 0) break;
+
+        if (isToday) {
+          const slotTotalMinutes = h * 60 + m;
+          // Damos 5 minutos de margen sobre el turno actual para que a las 12:15 no se borre el turno de las 12:15
+          if (slotTotalMinutes + 5 < currentTotalMinutes) {
+            continue;
+          }
+        }
+
+        const hourStr = h < 10 ? `0${h}` : `${h}`;
+        const minStr = m === 0 ? '00' : `${m}`;
+        options.push(`${hourStr}:${minStr}`);
+      }
+    }
+    return options;
+  }, [formData.start_date, todayStr, now]);
+
+  // Sincronización automática: garantiza que formData.start_time siempre tenga una opción válida de la lista actual
+  useEffect(() => {
+    if (hoursOptions.length > 0 && !hoursOptions.includes(formData.start_time)) {
+      setFormData((prev) => ({
+        ...prev,
+        start_time: hoursOptions[0],
+      }));
+    }
+  }, [hoursOptions, formData.start_time]);
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (totalSelectedItems === 0) {
       alert('Por favor, seleccioná al menos una bicicleta o accesorio.');
       return;
     }
+
+    if (formData.rental_type === '2h' && hoursOptions.length === 0) {
+      alert('Ya no quedan horarios disponibles para alquilar por 2 horas en el día de hoy.');
+      return;
+    }
+
+    // Capturamos el valor directamente del <select name="start_time"> del DOM antes de cualquier operación asíncrona
+    const formElement = e.currentTarget;
+    const domSelectedTime = (new FormData(formElement).get('start_time') as string) || '';
 
     setSubmitting(true);
     try {
@@ -492,7 +547,16 @@ export default function KioskCheckInPage() {
       const rentalId = crypto.randomUUID();
       const initialStatus = formData.start_date > todayStr ? 'reserved' : 'pending';
       const dbPaymentMethod = formData.payment_method === 'debit' ? 'bank' : formData.payment_method;
-      const timeNote = formData.rental_type === '2h' ? `[Horario: ${formData.start_time} hs - 2 horas]` : null;
+
+      // Priorizamos el valor real del <select> en el DOM, luego el estado validado, y por último la primera opción disponible
+      const chosenTime =
+        domSelectedTime && hoursOptions.includes(domSelectedTime)
+          ? domSelectedTime
+          : hoursOptions.includes(formData.start_time)
+          ? formData.start_time
+          : (hoursOptions[0] || formData.start_time);
+
+      const timeNote = formData.rental_type === '2h' ? `[Horario: ${chosenTime} hs - 2 horas]` : null;
 
       const { error: rentalError } = await supabase.from('rentals').insert({
         id: rentalId,
@@ -542,6 +606,10 @@ export default function KioskCheckInPage() {
   };
 
   const resetKiosk = () => {
+    const freshNow = new Date();
+    const freshToday = getLocalTodayStr();
+    setNow(freshNow);
+    setTodayStr(freshToday);
     setSelectedQuantities({});
     setConfirmedTotal(0);
     setFormData({
@@ -552,40 +620,14 @@ export default function KioskCheckInPage() {
       people_count: 1,
       rental_type: 'day',
       days_count: 1,
-      start_date: todayStr,
-      start_time: '09:00',
+      start_date: freshToday,
+      start_time: '',
       payment_method: 'cash',
     });
     setActiveTab('bikes');
     setSubmitted(false);
     fetchAvailableStock();
   };
-
-  const hoursOptions = useMemo(() => {
-    const options: string[] = [];
-    if (!now) return options;
-
-    const isToday = formData.start_date === todayStr;
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-
-    for (let h = 8; h <= 21; h++) {
-      for (let m = 0; m < 60; m += 15) {
-        if (h === 21 && m > 0) break;
-
-        if (isToday) {
-          if (h < currentHour || (h === currentHour && m <= currentMinute)) {
-            continue;
-          }
-        }
-
-        const hourStr = h < 10 ? `0${h}` : `${h}`;
-        const minStr = m === 0 ? '00' : `${m}`;
-        options.push(`${hourStr}:${minStr}`);
-      }
-    }
-    return options;
-  }, [formData.start_date, todayStr, now]);
 
   if (checkingAuth) {
     return (
@@ -650,6 +692,10 @@ export default function KioskCheckInPage() {
       </div>
     );
   }
+
+  const displayedStartTime = hoursOptions.includes(formData.start_time)
+    ? formData.start_time
+    : (hoursOptions[0] || '');
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-zinc-950 text-slate-900 dark:text-zinc-100 p-4 md:p-8 max-w-6xl mx-auto transition-colors">
@@ -719,7 +765,10 @@ export default function KioskCheckInPage() {
                     <button
                       key={t.id}
                       type="button"
-                      onClick={() => setFormData({ ...formData, rental_type: t.id as any })}
+                      onClick={() => {
+                        setNow(new Date());
+                        setFormData((prev) => ({ ...prev, rental_type: t.id as any }));
+                      }}
                       className={`flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-sm border transition ${
                         active
                           ? 'bg-orange-600 border-orange-500 text-white shadow-md shadow-orange-600/30 dark:shadow-orange-950/50'
@@ -746,21 +795,11 @@ export default function KioskCheckInPage() {
                   value={formData.start_date}
                   onChange={(e) => {
                     const newDate = e.target.value;
-                    setFormData((prev) => {
-                      const isNowToday = newDate === todayStr;
-                      const nowH = new Date().getHours();
-                      const nowM = new Date().getMinutes();
-                      let newTime = prev.start_time;
-
-                      if (isNowToday) {
-                        const [hStr, mStr] = prev.start_time.split(':');
-                        if (parseInt(hStr) < nowH || (parseInt(hStr) === nowH && parseInt(mStr) <= nowM)) {
-                          newTime = '09:00';
-                        }
-                      }
-
-                      return { ...prev, start_date: newDate, start_time: newTime };
-                    });
+                    setNow(new Date());
+                    setFormData((prev) => ({
+                      ...prev,
+                      start_date: newDate,
+                    }));
                   }}
                   className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-white font-bold text-sm focus:border-orange-600 dark:focus:border-orange-500 outline-none transition dark:[color-scheme:dark]"
                 />
@@ -772,8 +811,12 @@ export default function KioskCheckInPage() {
                     <Clock className="w-4 h-4 text-orange-600 dark:text-orange-500" /> Horario (08:00 a 21:00 hs)
                   </label>
                   <select
-                    value={formData.start_time}
-                    onChange={(e) => setFormData({ ...formData, start_time: e.target.value })}
+                    name="start_time"
+                    value={displayedStartTime}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormData((prev) => ({ ...prev, start_time: val }));
+                    }}
                     className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-white font-bold text-sm focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
                   >
                     {hoursOptions.length === 0 ? (
@@ -797,7 +840,7 @@ export default function KioskCheckInPage() {
                   <div className="flex items-center justify-between bg-slate-50 dark:bg-zinc-950 rounded-xl p-1.5 border border-slate-300 dark:border-zinc-700">
                     <button
                       type="button"
-                      onClick={() => setFormData({ ...formData, days_count: Math.max(1, formData.days_count - 1) })}
+                      onClick={() => setFormData((prev) => ({ ...prev, days_count: Math.max(1, prev.days_count - 1) }))}
                       className="p-2 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 text-slate-800 dark:text-white rounded-lg active:scale-95 transition"
                     >
                       <Minus className="w-4 h-4" />
@@ -805,7 +848,7 @@ export default function KioskCheckInPage() {
                     <span className="text-lg font-extrabold text-slate-900 dark:text-white">{formData.days_count}</span>
                     <button
                       type="button"
-                      onClick={() => setFormData({ ...formData, days_count: formData.days_count + 1 })}
+                      onClick={() => setFormData((prev) => ({ ...prev, days_count: prev.days_count + 1 }))}
                       className="p-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg active:scale-95 transition"
                     >
                       <Plus className="w-4 h-4" />
@@ -822,7 +865,7 @@ export default function KioskCheckInPage() {
               <div className="flex items-center justify-between bg-slate-50 dark:bg-zinc-950 rounded-xl p-2 border border-slate-300 dark:border-zinc-800 max-w-xs">
                 <button
                   type="button"
-                  onClick={() => setFormData({ ...formData, people_count: Math.max(1, formData.people_count - 1) })}
+                  onClick={() => setFormData((prev) => ({ ...prev, people_count: Math.max(1, prev.people_count - 1) }))}
                   className="p-2 bg-slate-200 dark:bg-zinc-800 hover:bg-slate-300 dark:hover:bg-zinc-700 text-slate-800 dark:text-white rounded-lg active:scale-95 transition"
                 >
                   <Minus className="w-4 h-4" />
@@ -830,7 +873,7 @@ export default function KioskCheckInPage() {
                 <span className="text-xl font-extrabold text-slate-900 dark:text-white">{formData.people_count}</span>
                 <button
                   type="button"
-                  onClick={() => setFormData({ ...formData, people_count: formData.people_count + 1 })}
+                  onClick={() => setFormData((prev) => ({ ...prev, people_count: prev.people_count + 1 }))}
                   className="p-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg active:scale-95 transition"
                 >
                   <Plus className="w-4 h-4" />
@@ -1032,7 +1075,7 @@ export default function KioskCheckInPage() {
                   <button
                     key={m.id}
                     type="button"
-                    onClick={() => setFormData({ ...formData, payment_method: m.id as any })}
+                    onClick={() => setFormData((prev) => ({ ...prev, payment_method: m.id as any }))}
                     className={`flex flex-col items-center justify-center gap-1.5 p-3 rounded-xl font-bold text-xs border transition ${
                       active
                         ? 'bg-orange-600 border-orange-500 text-white shadow-md shadow-orange-600/30 dark:shadow-orange-950/50'
@@ -1096,7 +1139,7 @@ export default function KioskCheckInPage() {
                 required
                 placeholder="Ej. Juan Pérez"
                 value={formData.customer_name}
-                onChange={(e) => setFormData({ ...formData, customer_name: e.target.value })}
+                onChange={(e) => setFormData((prev) => ({ ...prev, customer_name: e.target.value }))}
                 className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 text-slate-900 dark:text-white text-base focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
               />
             </div>
@@ -1108,7 +1151,7 @@ export default function KioskCheckInPage() {
                 required
                 placeholder="Ej. Hotel Las Restingas / Calle 9 de Julio 123"
                 value={formData.customer_address}
-                onChange={(e) => setFormData({ ...formData, customer_address: e.target.value })}
+                onChange={(e) => setFormData((prev) => ({ ...prev, customer_address: e.target.value }))}
                 className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 text-slate-900 dark:text-white text-base focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
               />
             </div>
@@ -1122,7 +1165,7 @@ export default function KioskCheckInPage() {
                   required
                   placeholder="Sin puntos"
                   value={formData.customer_dni}
-                  onChange={(e) => setFormData({ ...formData, customer_dni: e.target.value })}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, customer_dni: e.target.value }))}
                   className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 text-slate-900 dark:text-white text-base focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
                 />
               </div>
@@ -1134,7 +1177,7 @@ export default function KioskCheckInPage() {
                   required
                   placeholder="Ej. 2804123456"
                   value={formData.customer_phone}
-                  onChange={(e) => setFormData({ ...formData, customer_phone: e.target.value })}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, customer_phone: e.target.value }))}
                   className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-800 text-slate-900 dark:text-white text-base focus:border-orange-600 dark:focus:border-orange-500 outline-none transition"
                 />
               </div>
@@ -1143,7 +1186,7 @@ export default function KioskCheckInPage() {
             <div className="pt-4 border-t border-slate-200 dark:border-zinc-800 flex items-center justify-between gap-4">
               <div>
                 <p className="text-xs text-slate-500 dark:text-zinc-400 font-bold">
-                  Total ({formData.rental_type === '2h' ? `2 Horas (${formData.start_time} hs)` : `${formData.days_count} día/s`})
+                  Total ({formData.rental_type === '2h' ? `2 Horas (${displayedStartTime} hs)` : `${formData.days_count} día/s`})
                 </p>
                 <p className="text-3xl font-black text-orange-600 dark:text-orange-500">
                   ${totalAmount.toLocaleString('es-AR')}
@@ -1151,7 +1194,7 @@ export default function KioskCheckInPage() {
               </div>
               <button
                 type="submit"
-                disabled={submitting || totalSelectedItems === 0}
+                disabled={submitting || totalSelectedItems === 0 || (formData.rental_type === '2h' && hoursOptions.length === 0)}
                 className="px-6 py-4 bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-500 hover:to-red-500 disabled:opacity-40 text-white font-extrabold uppercase tracking-wider rounded-xl text-sm transition active:scale-95 shadow-lg shadow-orange-600/30 dark:shadow-orange-950/60"
               >
                 {submitting ? 'Enviando...' : formData.start_date > todayStr ? 'Confirmar Reserva' : 'Confirmar Alquiler'}

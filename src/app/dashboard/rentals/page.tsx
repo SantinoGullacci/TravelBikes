@@ -49,7 +49,7 @@ const doRentalDatesOverlap = (
   return startA <= endB && endA >= startB;
 };
 
-// Parsea y suma 2 horas al horario registrado en notas
+// Parsea y suma 2 horas + 30 minutos de tolerancia (150 min en total) al horario registrado en notas
 const getTwoHoursInfo = (notes?: string | null) => {
   if (!notes) return null;
   const match = notes.match(/(\d{1,2}:\d{2})\s*hs/i);
@@ -57,11 +57,15 @@ const getTwoHoursInfo = (notes?: string | null) => {
 
   const startTimeStr = match[1];
   const [hStr, mStr] = startTimeStr.split(':');
-  let h = parseInt(hStr, 10);
+  const h = parseInt(hStr, 10);
   const m = parseInt(mStr, 10);
 
-  const estimatedEndHour = (h + 2) % 24;
-  const endTimeStr = `${estimatedEndHour < 10 ? '0' : ''}${estimatedEndHour}:${m < 10 ? '0' : ''}${m}`;
+  // Sumamos 2 horas y 30 minutos (150 minutos) para dar media hora de tolerancia
+  const totalMinutes = h * 60 + m + 150;
+  const estimatedEndHour = Math.floor(totalMinutes / 60) % 24;
+  const estimatedEndMin = totalMinutes % 60;
+
+  const endTimeStr = `${String(estimatedEndHour).padStart(2, '0')}:${String(estimatedEndMin).padStart(2, '0')}`;
 
   return { startTimeStr, endTimeStr };
 };
