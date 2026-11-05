@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import {
@@ -63,6 +63,32 @@ const getLocalTodayStr = () => {
   return `${year}-${month}-${day}`;
 };
 
+// Genera la lista de horarios permitidos para una fecha y hora dadas
+const computeAvailableHours = (targetDateStr: string, todayDateStr: string, refNow: Date) => {
+  const options: string[] = [];
+  const isToday = targetDateStr === todayDateStr;
+  const currentTotalMinutes = refNow.getHours() * 60 + refNow.getMinutes();
+
+  for (let h = 8; h <= 21; h++) {
+    for (let m = 0; m < 60; m += 15) {
+      if (h === 21 && m > 0) break;
+
+      if (isToday) {
+        const slotTotalMinutes = h * 60 + m;
+        // Solo mostramos horarios de hoy que aún no hayan pasado (con 5 min de gracia si está parado en ese turno)
+        if (slotTotalMinutes + 5 < currentTotalMinutes) {
+          continue;
+        }
+      }
+
+      const hourStr = h < 10 ? `0${h}` : `${h}`;
+      const minStr = m === 0 ? '00' : `${m}`;
+      options.push(`${hourStr}:${minStr}`);
+    }
+  }
+  return options;
+};
+
 // Orden por defecto estricto: 1° R29, 2° R26, 3° E-Bikes, 4° Tándem/Otras, 5° Accesorios
 function getDefaultGroupPriority(modelName: string, variants: StockVariant[]): number {
   const first = variants[0];
@@ -103,6 +129,8 @@ const getEffectiveRentalEndDate = (rental: any, customStartDate?: string) => {
 
 export default function KioskCheckInPage() {
   const router = useRouter();
+  const timeSelectRef = useRef<HTMLSelectElement | null>(null);
+
   const [baseCatalog, setBaseCatalog] = useState<Omit<StockVariant, 'available_count'>[]>([]);
   const [activeCommitments, setActiveCommitments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -137,10 +165,6 @@ export default function KioskCheckInPage() {
   const [now, setNow] = useState<Date | null>(null);
 
   useEffect(() => {
-    setNow(new Date());
-  }, []);
-
-  useEffect(() => {
     let isMounted = true;
 
     const verifySession = async () => {
@@ -162,11 +186,16 @@ export default function KioskCheckInPage() {
 
     verifySession();
 
+    const initialNow = new Date();
     const currentDay = getLocalTodayStr();
+    const initialSlots = computeAvailableHours(currentDay, currentDay, initialNow);
+
+    setNow(initialNow);
     setTodayStr(currentDay);
     setFormData((prev) => ({
       ...prev,
       start_date: currentDay,
+      start_time: initialSlots[0] || '',
     }));
 
     const storedTheme = localStorage.getItem('theme');
@@ -443,33 +472,11 @@ export default function KioskCheckInPage() {
   const totalAmount = selectedList.reduce((sum, item) => sum + item.subtotal, 0);
 
   const hoursOptions = useMemo(() => {
-    const options: string[] = [];
-    if (!now) return options;
-
-    const isToday = formData.start_date === todayStr;
-    const currentTotalMinutes = now.getHours() * 60 + now.getMinutes();
-
-    for (let h = 8; h <= 21; h++) {
-      for (let m = 0; m < 60; m += 15) {
-        if (h === 21 && m > 0) break;
-
-        if (isToday) {
-          const slotTotalMinutes = h * 60 + m;
-          // Damos 5 minutos de margen sobre el turno actual para que a las 12:15 no se borre el turno de las 12:15
-          if (slotTotalMinutes + 5 < currentTotalMinutes) {
-            continue;
-          }
-        }
-
-        const hourStr = h < 10 ? `0${h}` : `${h}`;
-        const minStr = m === 0 ? '00' : `${m}`;
-        options.push(`${hourStr}:${minStr}`);
-      }
-    }
-    return options;
+    if (!now) return [];
+    return computeAvailableHours(formData.start_date || todayStr, todayStr, now);
   }, [formData.start_date, todayStr, now]);
 
-  // Sincronización automática: garantiza que formData.start_time siempre tenga una opción válida de la lista actual
+  // Sincronización automática: si el horario en estado no está en la lista válida (ej. cuando selecciona el 1° turno en móvil), lo clava en hoursOptions[0]
   useEffect(() => {
     if (hoursOptions.length > 0 && !hoursOptions.includes(formData.start_time)) {
       setFormData((prev) => ({
@@ -491,9 +498,8 @@ export default function KioskCheckInPage() {
       return;
     }
 
-    // Capturamos el valor directamente del <select name="start_time"> del DOM antes de cualquier operación asíncrona
-    const formElement = e.currentTarget;
-    const domSelectedTime = (new FormData(formElement).get('start_time') as string) || '';
+    // 1. Leemos directamente el valor seleccionado en el elemento <select> físico del DOM (evita el bug de iOS/Android en el 1° ítem)
+    const selectDomValue = timeSelectRef.current?.value || '';
 
     setSubmitting(true);
     try {
@@ -548,13 +554,28 @@ export default function KioskCheckInPage() {
       const initialStatus = formData.start_date > todayStr ? 'reserved' : 'pending';
       const dbPaymentMethod = formData.payment_method === 'debit' ? 'bank' : formData.payment_method;
 
-      // Priorizamos el valor real del <select> en el DOM, luego el estado validado, y por último la primera opción disponible
-      const chosenTime =
-        domSelectedTime && hoursOptions.includes(domSelectedTime)
-          ? domSelectedTime
-          : hoursOptions.includes(formData.start_time)
-          ? formData.start_time
-          : (hoursOptions[0] || formData.start_time);
+      // 2. Determinamos el horario elegido real con triple barrera de seguridad para móviles
+      let chosenTime = '';
+      if (formData.rental_type === '2h') {
+        if (selectDomValue && hoursOptions.includes(selectDomValue)) {
+          chosenTime = selectDomValue;
+        } else if (formData.start_time && hoursOptions.includes(formData.start_time)) {
+          chosenTime = formData.start_time;
+        } else {
+          chosenTime = hoursOptions[0] || '';
+        }
+
+        // Barrera final: si es para hoy, jamás permitir que se guarde un horario viejo como 09:00 si ya pasó
+        if (reqStart === todayStr && chosenTime) {
+          const [chH, chM] = chosenTime.split(':').map(Number);
+          const realNow = new Date();
+          const chosenTotalMins = chH * 60 + chM;
+          const nowTotalMins = realNow.getHours() * 60 + realNow.getMinutes();
+          if (chosenTotalMins + 5 < nowTotalMins && hoursOptions.length > 0) {
+            chosenTime = hoursOptions[0];
+          }
+        }
+      }
 
       const timeNote = formData.rental_type === '2h' ? `[Horario: ${chosenTime} hs - 2 horas]` : null;
 
@@ -608,6 +629,8 @@ export default function KioskCheckInPage() {
   const resetKiosk = () => {
     const freshNow = new Date();
     const freshToday = getLocalTodayStr();
+    const freshSlots = computeAvailableHours(freshToday, freshToday, freshNow);
+
     setNow(freshNow);
     setTodayStr(freshToday);
     setSelectedQuantities({});
@@ -621,7 +644,7 @@ export default function KioskCheckInPage() {
       rental_type: 'day',
       days_count: 1,
       start_date: freshToday,
-      start_time: '',
+      start_time: freshSlots[0] || '',
       payment_method: 'cash',
     });
     setActiveTab('bikes');
@@ -766,8 +789,14 @@ export default function KioskCheckInPage() {
                       key={t.id}
                       type="button"
                       onClick={() => {
-                        setNow(new Date());
-                        setFormData((prev) => ({ ...prev, rental_type: t.id as any }));
+                        const freshNow = new Date();
+                        setNow(freshNow);
+                        const validSlots = computeAvailableHours(formData.start_date || todayStr, todayStr, freshNow);
+                        setFormData((prev) => ({
+                          ...prev,
+                          rental_type: t.id as any,
+                          start_time: validSlots.includes(prev.start_time) ? prev.start_time : (validSlots[0] || ''),
+                        }));
                       }}
                       className={`flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-sm border transition ${
                         active
@@ -795,10 +824,13 @@ export default function KioskCheckInPage() {
                   value={formData.start_date}
                   onChange={(e) => {
                     const newDate = e.target.value;
-                    setNow(new Date());
+                    const freshNow = new Date();
+                    setNow(freshNow);
+                    const validSlots = computeAvailableHours(newDate, todayStr, freshNow);
                     setFormData((prev) => ({
                       ...prev,
                       start_date: newDate,
+                      start_time: validSlots.includes(prev.start_time) ? prev.start_time : (validSlots[0] || ''),
                     }));
                   }}
                   className="w-full p-3.5 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-white font-bold text-sm focus:border-orange-600 dark:focus:border-orange-500 outline-none transition dark:[color-scheme:dark]"
@@ -811,6 +843,7 @@ export default function KioskCheckInPage() {
                     <Clock className="w-4 h-4 text-orange-600 dark:text-orange-500" /> Horario (08:00 a 21:00 hs)
                   </label>
                   <select
+                    ref={timeSelectRef}
                     name="start_time"
                     value={displayedStartTime}
                     onChange={(e) => {
