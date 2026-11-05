@@ -487,7 +487,12 @@ export default function RentalsDashboardPage() {
                             </span>
                             {twoHoursInfo?.endTimeStr && (
                               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-orange-50 dark:bg-orange-950/60 border border-orange-200 dark:border-orange-800 text-orange-700 dark:text-orange-400 text-xs font-black">
-                                Devolución estimada: <strong className="text-orange-600 dark:text-orange-300 ml-0.5">{twoHoursInfo.endTimeStr} hs</strong>
+                                Devolución estimada: <strong className="text-orange-600 dark:text-orange-300 ml-0.5">{(() => {
+                                  const [hours, minutes] = twoHoursInfo.endTimeStr.split(':').map(Number);
+                                  const earlierMinutes = (hours * 60 + minutes - 30 + 1440) % 1440;
+                                  const earlierTime = `${String(Math.floor(earlierMinutes / 60)).padStart(2, '0')}:${String(earlierMinutes % 60).padStart(2, '0')}`;
+                                  return `${earlierTime}/${twoHoursInfo.endTimeStr} hs`;
+                                })()}</strong>
                               </span>
                             )}
                           </>
